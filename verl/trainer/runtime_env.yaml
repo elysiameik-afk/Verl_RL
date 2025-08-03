@@ -1,6 +1,15 @@
+# verl/trainer/runtime_env.yaml
+
+# You can keep working_dir as ./, but you MUST add the correct excludes.
 working_dir: ./
-excludes: ["/.git/"]
+
+# This is the crucial part. We are telling Ray to NOT package these large folders.
+excludes:
+  - ".git/"            # Exclude git repository metadata
+  - "mymodels" 
+  - "data" 
 env_vars:
   TORCH_NCCL_AVOID_RECORD_STREAMS: "1"
+  VLLM_ATTENTION_BACKEND: "XFORMERS"
   # If you are using vllm<=0.6.3, you might need to set the following environment variable to avoid bugs:
   # VLLM_ATTENTION_BACKEND: "XFORMERS"

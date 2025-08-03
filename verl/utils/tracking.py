@@ -127,10 +127,10 @@ class Tracking:
         if "clearml" in default_backend:
             self.logger["clearml"] = ClearMLLogger(project_name, experiment_name, config)
 
-    def log(self, data, step, backend=None):
+    def log(self, data, step, backend=None, **kwargs):
         for default_backend, logger_instance in self.logger.items():
             if backend is None or default_backend in backend:
-                logger_instance.log(data=data, step=step)
+                logger_instance.log(data=data, step=step, **kwargs)
 
     def __del__(self):
         if "wandb" in self.logger:

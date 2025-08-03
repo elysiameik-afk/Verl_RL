@@ -99,7 +99,7 @@ actor_rollout_ref:
   
     # Huggingface model path. This can be either local path or HDFS path.
     path: ~/models/deepseek-llm-7b-chat
-
+    # path: /root/autodl-tmp/myverl/mymodels/qwen3-0.6b
     # Whether to use shared memory (SHM) for accelerating the loading of model weights
     use_shm: false
 
@@ -484,6 +484,7 @@ critic:
 
     # Path to pretrained model weights
     path: ~/models/deepseek-llm-7b-chat
+    # path: /root/autodl-tmp/myverl/mymodels/qwen3-0.6b
 
     # Whether to use shared memory for loading the model
     use_shm: False

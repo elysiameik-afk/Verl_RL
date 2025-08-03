@@ -14,10 +14,11 @@
 """
 Note that we don't combine the main with ray_trainer as ray_trainer is used by other main.
 """
-
+import wandb
+import logging
 import hydra
 import ray
-
+import time
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 from verl.trainer.ppo.reward import load_reward_manager
 
@@ -40,16 +41,51 @@ def run_ppo(config) -> None:
             num_cpus=config.ray_init.num_cpus,
         )
 
-    # Create a remote instance of the TaskRunner class, and
-    # Execute the `run` method of the TaskRunner instance remotely and wait for it to complete
-    runner = TaskRunner.remote()
-    ray.get(runner.run.remote(config))
+    # # Create a remote instance of the TaskRunner class, and
+    # # Execute the `run` method of the TaskRunner instance remotely and wait for it to complete
+    # runner = TaskRunner.remote()
+    # ray.get(runner.run.remote(config))
 
-    # [Optional] get the path of the timeline trace file from the configuration, default to None
-    # This file is used for performance analysis
+    # # [Optional] get the path of the timeline trace file from the configuration, default to None
+    # # This file is used for performance analysis
+    # timeline_json_file = config.ray_init.get("timeline_json_file", None)
+    # if timeline_json_file:
+    #     ray.timeline(filename=timeline_json_file)
+
+
+    # --- 这里是关键的修改 ---
+    try:
+        # 创建远程实例并执行任务
+        runner = TaskRunner.remote()
+        logging.info("主进程：已启动远程训练任务，正在等待其完成...")
+        ray.get(runner.run.remote(config))
+        logging.info("主进程：检测到远程训练任务已完成。")
+
+    finally:
+        # 无论远程任务是成功还是失败，这部分都会在主进程退出前执行
+        logging.info("主进程：进入 finally 块，准备关闭W&B和Ray...")
+        
+        # 检查是否使用了wandb，如果使用了就调用finish
+        # 'wandb' in config.trainer.logger 是一个健壮的检查方式
+        if config.trainer.get("logger") and 'wandb' in config.trainer.logger:
+            time.sleep(30)
+            logging.info("主进程：正在调用 wandb.finish() 来确保所有数据已同步...")
+            wandb.finish()
+            logging.info("主_进程：wandb.finish() 已完成。")
+        else:
+            logging.info("主进程：未在配置中找到W&B logger，跳过 wandb.finish()。")
+            
+        # # [可选但推荐]：在最后关闭Ray
+        # ray.shutdown()
+        # logging.info("主进程：Ray已关闭。程序即将退出。")
+
+    # --- 原来的可选 timeline 代码可以保留 ---
     timeline_json_file = config.ray_init.get("timeline_json_file", None)
     if timeline_json_file:
         ray.timeline(filename=timeline_json_file)
+
+
+
 
 
 @ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head

@@ -1,70 +1,74 @@
 #!/usr/bin/env bash
 set -xeuo pipefail
 
+# ==============================================================================
+# 变量配置 (与之前保持一致)
+# ==============================================================================
 project_name='DAPO'
-exp_name='DAPO-Qwen3-0.6b-SingleGPU' # CHANGED: 实验名称以作区分
+exp_name='DAPO-Qwen3-0.6b-think-free4' # 修改了实验名以作区分
 
 adv_estimator=grpo
-
 use_kl_in_reward=False
 kl_coef=0.0
 use_kl_loss=False
 kl_loss_coef=0.0
-
 clip_ratio_low=0.2
 clip_ratio_high=0.28
 
-# CHANGED: 如果显存仍然不足，可以考虑减小序列长度
-max_prompt_length=$((1024 * 2)) #
-max_response_length=$((1024 * 8)) #
+# 内存相关参数，如果遇到OOM可以从这里开始调整reward_fn_key
+max_prompt_length=$((1024 * 2))
+max_response_length=$((1024 * 2)) # 注意：这个值非常影响显存，8k->2k可以显著降低OOM风险
+n_resp_per_prompt=8              # 注意：这个值也非常影响显存，16->8可以显著降低OOM风险
+
+train_prompt_bsz=4
+gen_prompt_bsz=$((train_prompt_bsz * 2))
+train_prompt_mini_bsz=4
 
 enable_overlong_buffer=True
 overlong_buffer_len=512
 overlong_penalty_factor=1.0
-
 loss_agg_mode="token-mean"
-
-enable_filter_groups=True
-filter_groups_metric=acc
+enable_filter_groups=False
+filter_groups_metric=logic_rl_score
 max_num_gen_batches=10
 
-# CHANGED: 大幅减小批量大小以适应单卡显存
-train_prompt_bsz=4
-gen_prompt_bsz=$((train_prompt_bsz * 2)) # 同样减小
-train_prompt_mini_bsz=4 # 必须 <= train_prompt_bsz
-n_resp_per_prompt=16 # 注意：这个值也会显著影响显存，如果OOM可以减小它
+# 路径配置 (请确保这些路径在你的机器上是正确的)
+WORKING_DIR=${PWD} # 直接使用当前目录
+NNODES=1
+HOME_DIR=${HOME}
+RAY_DATA_HOME="${HOME_DIR}/autodl-tmp/myverl"
+MODEL_PATH="${RAY_DATA_HOME}/mymodels/qwen3-0.6b-base"
+CKPTS_DIR="${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"
+TRAIN_FILE="${RAY_DATA_HOME}/data/kk/train_first_100.parquet"
+TEST_FILE="${RAY_DATA_HOME}/data/kk/test.parquet"
+mkdir -p "${CKPTS_DIR}"
 
-# Ray
-# CHANGED: 对于本地单机运行，可以不指定 RAY_ADDRESS
-# RAY_ADDRESS=${RAY_ADDRESS:-"http://localhost:8265"}
-WORKING_DIR=${WORKING_DIR:-"${PWD}"}
-RUNTIME_ENV=${RUNTIME_ENV:-"${WORKING_DIR}/verl/trainer/runtime_env.yaml"}
-NNODES=${NNODES:-1} # CHANGED: 节点数改为 1
-
-# Paths
-RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/autodl-tmp/verl"}
-MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/mymodels/qwen3-0.6b-base"}
-CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
-TRAIN_FILE=${TRAIN_FILE:-"${RAY_DATA_HOME}/data/train.parquet"}
-TEST_FILE=${TEST_FILE:-"${RAY_DATA_HOME}/data/test.parquet"}
-
-# Algorithm
+# 算法配置
 temperature=1.0
 top_p=1.0
-top_k=-1 # 0 for HF rollout, -1 for vLLM rollout
-
-# Mathematically equivalent
+top_k=-1
+offload=True
 use_dynamic_bsz=True
 infer_micro_batch_size=null
 train_micro_batch_size=null
-# CHANGED: 开启CPU Offload以节省显存
-offload=True
 
-# 如果你的 Ray Cluster 尚未启动，ray job submit 会为你启动一个临时的
-# 对于本地运行，可以省略 --address
-ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
-    --working-dir "${WORKING_DIR}" \
-    -- python3 -m recipe.dapo.main_dapo \
+# ==============================================================================
+# 直接运行 Python 脚本
+# 这种方式会绕过 runtime_env.yaml，所以我们在这里手动设置环境变量
+# ==============================================================================
+
+# 手动设置在 runtime_env.yaml 中定义的环境变量
+export TORCH_NCCL_AVOID_RECORD_STREAMS="1"
+# export VLLM_ATTENTION_BACKEND="XFORMERS"
+# 为了解决之前遇到的模型加载问题，继续保留这个变量
+export HF_HUB_OFFLINE=1
+export WANDB_API_KEY="9426da0e81fb52759c616fe8cbe799318108e980"
+echo "Starting DAPO training directly with Python..."
+echo "Model Path: ${MODEL_PATH}"
+echo "Train File: ${TRAIN_FILE}"
+echo "Checkpoints will be saved to: ${CKPTS_DIR}"
+
+python3 -m recipe.dapo.main_dapo \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${TEST_FILE}" \
     data.prompt_key=prompt \
@@ -122,18 +126,18 @@ ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
     actor_rollout_ref.ref.fsdp_config.param_offload=${offload} \
     actor_rollout_ref.ref.ulysses_sequence_parallel_size=1 \
     actor_rollout_ref.actor.fsdp_config.fsdp_size=-1 \
-    reward_model.reward_manager=dapo \
+    reward_model.reward_manager=logic_rl \
     reward_model.overlong_buffer.enable=${enable_overlong_buffer} \
     reward_model.overlong_buffer.len=${overlong_buffer_len} \
     reward_model.overlong_buffer.penalty_factor=${overlong_penalty_factor} \
-    trainer.logger=['console','wandb'] \
+    trainer.logger="['console','wandb']" \
     trainer.project_name="${project_name}" \
     trainer.experiment_name="${exp_name}" \
     trainer.n_gpus_per_node=1 \
     trainer.nnodes="${NNODES}" \
     trainer.val_before_train=True \
-    trainer.test_freq=2 \
-    trainer.save_freq=2 \
-    trainer.total_epochs=1 \
+    trainer.test_freq=6 \
+    trainer.save_freq=12 \
+    trainer.total_epochs=3 \
     trainer.default_local_dir="${CKPTS_DIR}" \
     trainer.resume_mode=disable
