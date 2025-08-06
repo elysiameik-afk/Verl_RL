@@ -17,7 +17,7 @@ from collections import defaultdict
 import torch
 
 from verl import DataProto
-from verl.utils.reward_score import gsm8k, math, multiply, countdown, kk
+from verl.utils.reward_score import gsm8k, math, multiply, countdown, kk,rule
 from .registry import register
 
 def _select_rm_score_fn(data_source):
@@ -31,6 +31,8 @@ def _select_rm_score_fn(data_source):
         return countdown.compute_score
     elif "kk" in data_source:
         return kk.compute_score
+    elif "rule" in data_source:
+        return rule.compute_score
     else:
         raise NotImplementedError
 
@@ -76,7 +78,7 @@ class LogicRLRewardManager:
             ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
             data_source = data_item.non_tensor_batch[self.reward_fn_key]
             
-            compute_score_fn = _select_rm_score_fn(data_source)
+            compute_score_fn = _select_rm_score_fn("rule")
             
             # The Logic-RL score functions expect the full response string
             score = compute_score_fn(solution_str=response_str, ground_truth=ground_truth)
