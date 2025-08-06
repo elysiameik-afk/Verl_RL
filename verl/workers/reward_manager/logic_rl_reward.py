@@ -81,8 +81,8 @@ class LogicRLRewardManager:
             compute_score_fn = _select_rm_score_fn("rule")
             
             # The Logic-RL score functions expect the full response string
-            score = compute_score_fn(solution_str=response_str, ground_truth=ground_truth)
-            
+            # score = compute_score_fn(solution_str=response_str, ground_truth=ground_truth)
+            score = compute_score_fn(response_str,ground_truth)            
             reward_extra_info["logic_rl_score"].append(score)
             reward_tensor[i, valid_response_length - 1] = score
 

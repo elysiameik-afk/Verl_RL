@@ -15,7 +15,7 @@ _RE_ANSWER_END = re.compile(r'</answer>')
 _RE_THINK_CONTENT = re.compile(r'<think>(.*?)</think>', re.DOTALL)
 _RE_ANSWER_CONTENT = re.compile(r'<answer>(.*?)</answer>', re.DOTALL)
 
-def compute_score(model_response: str) -> float:
+def compute_score(model_response: str,ground_truth: str,) -> float:
     """
     高效计算模型响应的格式分数。
     该函数优先检查最关键的格式问题，并在发现严重错误时提前退出以优化性能。

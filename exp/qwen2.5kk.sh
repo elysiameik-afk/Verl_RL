@@ -33,9 +33,9 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
     trainer.project_name=Qwen2.5-0.5 \
-    trainer.experiment_name=GRPO_KK_few_12 \
+    trainer.experiment_name=GRPO_KK_few_13 \
     trainer.n_gpus_per_node=1 \
-    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_12 \
+    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_13 \
     trainer.nnodes=1 \
     trainer.save_freq=10 \
     trainer.test_freq=1 \
