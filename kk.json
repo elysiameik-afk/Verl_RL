@@ -1,0 +1,157 @@
+[
+  {
+    "quiz":"A very special island is inhabited only by knights and knaves. Knights always tell the truth, and knaves always lie. You meet 3 inhabitants: Michael, Zoey, and Ethan. Michael was heard saying, \"Ethan is a knight if and only if Michael is a knight\". \"Zoey is a knight or Ethan is a knight,\" Zoey mentioned. Ethan asserted: \"Michael is a knave if and only if Zoey is a knave\". So who is a knight and who is a knave?",
+    "names":[
+      "Michael",
+      "Zoey",
+      "Ethan"
+    ],
+    "knight_knave":{
+      "Knave":"Knave",
+      "Knight":"Knight",
+      "a_knave":"a knave",
+      "a_knight":"a knight",
+      "knave":"knave",
+      "knight":"knight"
+    },
+    "solution":[
+      true,
+      true,
+      true
+    ],
+    "solution_text":"Michael is a knight, Zoey is a knight, and Ethan is a knight.",
+    "solution_text_format":"(1) Michael is a knight\n(2) Zoey is a knight\n(3) Ethan is a knight",
+    "cot_head":"Let's think step by step, by considering whether each person is lying and if that leads to contradiction.",
+    "cot_repeat_steps":[
+      "Assume Michael is a knight. No contradiction is found in their claim that Ethan is a knight if and only if Michael is a knight.",
+      "Assume Ethan is a knight. No contradiction is found in their claim that Michael is a knave if and only if Zoey is a knave.",
+      "Assume Zoey is a knight. No contradiction is found in their claim that Zoey is a knight or Ethan is a knight."
+    ],
+    "cot_foot":"This leads to a feasible solution.",
+    "statements":"(('<=>', ('telling-truth', 2), ('telling-truth', 0)), ('or', ('telling-truth', 1), ('telling-truth', 2)), ('<=>', ('lying', 0), ('lying', 1)))",
+    "index":100,
+    "data_source":"kk_logic",
+    "prompt":[
+      {
+        "content":"<|im_start|>system\nYou are a helpful assistant. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> <\/think> and<answer> <\/answer> tags, respectively, i.e., <think> reasoning process here <\/think><answer> answer here <\/answer>.  Now the user asks you to solve a logical reasoning problem. After thinking, when you finally reach a conclusion, clearly state the identity of each character within <answer> <\/answer> tags. i.e., <answer> (1) Zoey is a knight\n(2) ... <\/answer>.\n<|im_end|>\n<|im_start|>user\nA very special island is inhabited only by knights and knaves. Knights always tell the truth, and knaves always lie. You meet 3 inhabitants: Michael, Zoey, and Ethan. Michael was heard saying, \"Ethan is a knight if and only if Michael is a knight\". \"Zoey is a knight or Ethan is a knight,\" Zoey mentioned. Ethan asserted: \"Michael is a knave if and only if Zoey is a knave\". So who is a knight and who is a knave?\n<|im_end|>\n<|im_start|>assistant\n<think>",
+        "role":"user"
+      }
+    ],
+    "ability":"logic",
+    "reward_model":{
+      "ground_truth":{
+        "solution_text_format":"(1) Michael is a knight\n(2) Zoey is a knight\n(3) Ethan is a knight",
+        "statements":"(('<=>', ('telling-truth', 2), ('telling-truth', 0)), ('or', ('telling-truth', 1), ('telling-truth', 2)), ('<=>', ('lying', 0), ('lying', 1)))"
+      },
+      "style":"rule"
+    },
+    "extra_info":{
+      "index":0,
+      "split":"train"
+    }
+  },
+  {
+    "quiz":"A very special island is inhabited only by knights and knaves. Knights always tell the truth, and knaves always lie. You meet 3 inhabitants: Michael, Mason, and Jacob. Michael commented, \"Mason is not a knight\". Mason commented, \"Michael is a knight and Jacob is a knave\". Jacob stated, \"If Michael is a knight then Jacob is a knight\". So who is a knight and who is a knave?",
+    "names":[
+      "Michael",
+      "Mason",
+      "Jacob"
+    ],
+    "knight_knave":{
+      "Knave":"Knave",
+      "Knight":"Knight",
+      "a_knave":"a knave",
+      "a_knight":"a knight",
+      "knave":"knave",
+      "knight":"knight"
+    },
+    "solution":[
+      true,
+      false,
+      true
+    ],
+    "solution_text":"Michael is a knight, Mason is a knave, and Jacob is a knight.",
+    "solution_text_format":"(1) Michael is a knight\n(2) Mason is a knave\n(3) Jacob is a knight",
+    "cot_head":"Let's think step by step, by considering whether each person is lying and if that leads to contradiction.",
+    "cot_repeat_steps":[
+      "Assume Michael is a knight. No contradiction is found in their claim that Mason is not a knight.",
+      "Mason cannot be a knight, because this would contradict the claim of Michael that Mason is not a knight.",
+      "Assume Mason is a knave. No contradiction is found in their false claim that Michael is a knight and Jacob is a knave.",
+      "Assume Jacob is a knight. No contradiction is found in their claim that If Michael is a knight then Jacob is a knight."
+    ],
+    "cot_foot":"This leads to a feasible solution.",
+    "statements":"(('not', ('telling-truth', 1)), ('and', ('telling-truth', 0), ('lying', 2)), ('->', ('telling-truth', 0), ('telling-truth', 2)))",
+    "index":101,
+    "data_source":"kk_logic",
+    "prompt":[
+      {
+        "content":"<|im_start|>system\nYou are a helpful assistant. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> <\/think> and<answer> <\/answer> tags, respectively, i.e., <think> reasoning process here <\/think><answer> answer here <\/answer>.  Now the user asks you to solve a logical reasoning problem. After thinking, when you finally reach a conclusion, clearly state the identity of each character within <answer> <\/answer> tags. i.e., <answer> (1) Zoey is a knight\n(2) ... <\/answer>.\n<|im_end|>\n<|im_start|>user\nA very special island is inhabited only by knights and knaves. Knights always tell the truth, and knaves always lie. You meet 3 inhabitants: Michael, Mason, and Jacob. Michael commented, \"Mason is not a knight\". Mason commented, \"Michael is a knight and Jacob is a knave\". Jacob stated, \"If Michael is a knight then Jacob is a knight\". So who is a knight and who is a knave?\n<|im_end|>\n<|im_start|>assistant\n<think>",
+        "role":"user"
+      }
+    ],
+    "ability":"logic",
+    "reward_model":{
+      "ground_truth":{
+        "solution_text_format":"(1) Michael is a knight\n(2) Mason is a knave\n(3) Jacob is a knight",
+        "statements":"(('not', ('telling-truth', 1)), ('and', ('telling-truth', 0), ('lying', 2)), ('->', ('telling-truth', 0), ('telling-truth', 2)))"
+      },
+      "style":"rule"
+    },
+    "extra_info":{
+      "index":1,
+      "split":"train"
+    }
+  },
+  {
+    "quiz":"A very special island is inhabited only by knights and knaves. Knights always tell the truth, and knaves always lie. You meet 3 inhabitants: Lucas, Harper, and Amelia. Lucas expressed that Harper is not a knave. In a statement by Harper: \"Harper is a knight if and only if Amelia is a knave\". As Amelia put it, \"Harper is not a knight\". So who is a knight and who is a knave?",
+    "names":[
+      "Lucas",
+      "Harper",
+      "Amelia"
+    ],
+    "knight_knave":{
+      "Knave":"Knave",
+      "Knight":"Knight",
+      "a_knave":"a knave",
+      "a_knight":"a knight",
+      "knave":"knave",
+      "knight":"knight"
+    },
+    "solution":[
+      true,
+      true,
+      false
+    ],
+    "solution_text":"Lucas is a knight, Harper is a knight, and Amelia is a knave.",
+    "solution_text_format":"(1) Lucas is a knight\n(2) Harper is a knight\n(3) Amelia is a knave",
+    "cot_head":"Let's think step by step, by considering whether each person is lying and if that leads to contradiction.",
+    "cot_repeat_steps":[
+      "Assume Lucas is a knight. No contradiction is found in their claim that Harper is not a knave.",
+      "Assume Harper is a knight. No contradiction is found in their claim that Harper is a knight if and only if Amelia is a knave.",
+      "Amelia cannot be a knight, because this would contradict the claim of Harper that Harper is a knight if and only if Amelia is a knave.",
+      "Assume Amelia is a knave. No contradiction is found in their false claim that Harper is not a knight."
+    ],
+    "cot_foot":"This leads to a feasible solution.",
+    "statements":"(('not', ('lying', 1)), ('<=>', ('telling-truth', 1), ('lying', 2)), ('not', ('telling-truth', 1)))",
+    "index":102,
+    "data_source":"kk_logic",
+    "prompt":[
+      {
+        "content":"<|im_start|>system\nYou are a helpful assistant. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> <\/think> and<answer> <\/answer> tags, respectively, i.e., <think> reasoning process here <\/think><answer> answer here <\/answer>.  Now the user asks you to solve a logical reasoning problem. After thinking, when you finally reach a conclusion, clearly state the identity of each character within <answer> <\/answer> tags. i.e., <answer> (1) Zoey is a knight\n(2) ... <\/answer>.\n<|im_end|>\n<|im_start|>user\nA very special island is inhabited only by knights and knaves. Knights always tell the truth, and knaves always lie. You meet 3 inhabitants: Lucas, Harper, and Amelia. Lucas expressed that Harper is not a knave. In a statement by Harper: \"Harper is a knight if and only if Amelia is a knave\". As Amelia put it, \"Harper is not a knight\". So who is a knight and who is a knave?\n<|im_end|>\n<|im_start|>assistant\n<think>",
+        "role":"user"
+      }
+    ],
+    "ability":"logic",
+    "reward_model":{
+      "ground_truth":{
+        "solution_text_format":"(1) Lucas is a knight\n(2) Harper is a knight\n(3) Amelia is a knave",
+        "statements":"(('not', ('lying', 1)), ('<=>', ('telling-truth', 1), ('lying', 2)), ('not', ('telling-truth', 1)))"
+      },
+      "style":"rule"
+    },
+    "extra_info":{
+      "index":2,
+      "split":"train"
+    }
+  }
+]

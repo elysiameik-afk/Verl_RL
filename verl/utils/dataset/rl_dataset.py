@@ -161,10 +161,22 @@ class RLHFDataset(Dataset):
 
     def _build_messages(self, example: dict):
         messages: list = example.pop(self.prompt_key)
-
+        # cot_head= example["cot_head"]
+         
+        # cot_repeat_steps= ""   
+        # for cot_repeat_step in example["cot_repeat_steps"]:
+        #     cot_repeat_steps+=cot_repeat_step
+        # truth=example["reward_model"]["ground_truth"]["solution_text_format"]     
+        # messages[0]["content"] = messages[0]["content"][:-40]+"Please make sure to write your detailed thinking and reasoning process in the<think></think>structure, and finally write the brief conclusion directly in the<answer></answer>. The following is the reference format and answer content for this question, which you can refer to for learning."+"<think>" +cot_head+ cot_repeat_steps+"</think>"+"/n"+"<answer>"+truth+"</answer>"+messages[0]["content"][-41:-29] # set system role for the first message
+        
+        messages[0]["content"] = messages[0]["content"][:-29] # set system role for the first message
+        # print("====================================================================",messages)
+        # content = message["content"][:-32]
+        # print("====================================================================",content)
         if self.image_key in example or self.video_key in example:
             for message in messages:
-                content = message["content"][:-7]
+                content = message["content"]
+
                 content_list = []
                 for segment in re.split("(<image>|<video>)", content):
                     if segment == "<image>":

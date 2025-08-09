@@ -17,10 +17,11 @@ from collections import defaultdict
 import torch
 
 from verl import DataProto
-from verl.utils.reward_score import gsm8k, math, multiply, countdown, kk,rule
+from verl.utils.reward_score import gsm8k, math, multiply, countdown, kk,rule,newkk
 from .registry import register
 
 def _select_rm_score_fn(data_source):
+
     if data_source == "openai/gsm8k":
         return gsm8k.compute_score
     elif data_source == "lighteval/MATH":
@@ -33,6 +34,9 @@ def _select_rm_score_fn(data_source):
         return kk.compute_score
     elif "rule" in data_source:
         return rule.compute_score
+    # elif "newkk" in data_source:
+
+    #     return newkk.compute_score
     else:
         raise NotImplementedError
 
@@ -78,7 +82,7 @@ class LogicRLRewardManager:
             ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
             data_source = data_item.non_tensor_batch[self.reward_fn_key]
             
-            compute_score_fn = _select_rm_score_fn("rule")
+            compute_score_fn = _select_rm_score_fn("kk")
             
             # The Logic-RL score functions expect the full response string
             # score = compute_score_fn(solution_str=response_str, ground_truth=ground_truth)
