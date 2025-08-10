@@ -565,6 +565,15 @@ def apply_ema_smoothing(
         current_raw = raw_weights[i]
         current_smoothed = beta * current_raw + (1 - beta) * prev_ema
         
+        # Debug: 打印详细信息（仅第一个序列，避免过多输出）
+        if i == 0 and torch.distributed.get_rank() == 0:
+            step_count = ema_weights_state[seq_id]['step_count']
+            print(f"🔍 [EMA-DEBUG] seq_id={seq_id}, step={step_count}")
+            print(f"  raw_weights范围: [{current_raw.min().item():.4f}, {current_raw.max().item():.4f}]")
+            print(f"  prev_ema范围: [{prev_ema.min().item():.4f}, {prev_ema.max().item():.4f}]")
+            print(f"  smoothed范围: [{current_smoothed.min().item():.4f}, {current_smoothed.max().item():.4f}]")
+            print(f"  beta={beta}, 权重差异={torch.norm(current_raw - current_smoothed).item():.6f}")
+        
         # Update smoothed weights
         smoothed_weights[i] = current_smoothed
         
