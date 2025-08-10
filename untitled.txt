@@ -1,0 +1,4 @@
+python model_merger.py merge \
+    --backend fsdp \
+    --local_dir /root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_51/global_step_12/actor \
+    --target_dir /root/autodl-tmp/myverl/merged_models/qwen3-grpo-final51-12

@@ -10,7 +10,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_batch_size=8 \
     data.max_prompt_length=4096 \
     data.max_response_length=4096 \
-    actor_rollout_ref.model.path=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_21/global_step_10/actor \
+    actor_rollout_ref.model.path=/root/autodl-tmp/myverl/mymodels/qwen3-0.6b \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=16 \

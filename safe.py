@@ -5,10 +5,10 @@ import sys
 
 # --- 请配置您的路径 ---
 # 源目录：包含您所有原始文件的文件夹
-source_directory = "/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_35/global_step_25/actor/"
+source_directory = "/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_43/global_step_16/actor/"
 
 # 目标目录：一个全新的、只用于存放推理所需文件的文件夹
-destination_directory = "/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_35/global_step_25/actor_inference/"
+destination_directory = "/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_43/global_step_16/actor_inference/"
 
 # --- 脚本主逻辑 ---
 
