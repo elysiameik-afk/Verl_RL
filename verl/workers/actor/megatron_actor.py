@@ -278,8 +278,15 @@ class MegatronPPOActor(BasePPOActor):
         if self.config.use_kl_loss:
             select_keys.append("ref_log_prob")
         self.has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
-        if self.has_multi_modal_inputs:
-            data = data.select(select_keys, ["multi_modal_inputs"])
+        has_uid = "uid" in data.non_tensor_batch.keys()
+        
+        if self.has_multi_modal_inputs or has_uid:
+            non_tensor_select_keys = []
+            if self.has_multi_modal_inputs:
+                non_tensor_select_keys.append("multi_modal_inputs")
+            if has_uid:
+                non_tensor_select_keys.append("uid")
+            data = data.select(select_keys, non_tensor_select_keys)
         else:
             data = data.select(batch_keys=select_keys)
         return data.make_iterator(
