@@ -38,7 +38,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 from verl import DataProto
-from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_policy_loss_with_ema, kl_penalty
+from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, kl_penalty
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.debug.profile import Profiler
 from verl.utils.megatron.pipeline_parallel import make_batch_generator
@@ -136,13 +136,6 @@ class MegatronPPOActor(BasePPOActor):
         config = get_model_config(self.actor_module[0])
         print(config)
         config.finalize_model_grads_func = finalize_model_grads
-        
-        # Initialize EMA state for importance weight smoothing
-        self.ema_weights_state = {}
-        self.use_ema_smoothing = self.config.get("use_ema_smoothing", False)
-        self.ema_beta = self.config.get("ema_beta", 0.9)
-        if torch.distributed.get_rank() == 0:
-            print(f"Megatron Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta}")
 
     def _validate_config(self, config) -> None:
         """Validate config options not implemented for Megatron backend"""
@@ -359,43 +352,17 @@ class MegatronPPOActor(BasePPOActor):
                 clip_ratio_low = self.config.clip_ratio_low if self.config.clip_ratio_low is not None else clip_ratio
                 clip_ratio_high = self.config.clip_ratio_high if self.config.clip_ratio_high is not None else clip_ratio
                 clip_ratio_c = meta_info["clip_ratio_c"]
-                
-                # Get sequence IDs for EMA tracking
-                sequence_ids = None
-                if self.use_ema_smoothing and "uid" in data:
-                    sequence_ids = data["uid"] if isinstance(data["uid"], list) else data["uid"].tolist()
-
-                # Use EMA-enabled policy loss computation
-                if self.use_ema_smoothing and sequence_ids is not None:
-                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, ema_metrics = compute_policy_loss_with_ema(
-                        old_log_prob=old_log_prob,
-                        log_prob=log_prob,
-                        advantages=advantages,
-                        response_mask=response_mask,
-                        cliprange=clip_ratio,
-                        cliprange_low=clip_ratio_low,
-                        cliprange_high=clip_ratio_high,
-                        clip_ratio_c=clip_ratio_c,
-                        loss_agg_mode=loss_agg_mode,
-                        ema_weights_state=self.ema_weights_state,
-                        sequence_ids=sequence_ids,
-                        beta=self.ema_beta,
-                        use_ema=True,
-                    )
-                    # Add EMA metrics to the metrics dictionary
-                    metrics.update(ema_metrics)
-                else:
-                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
-                        old_log_prob=old_log_prob,
-                        log_prob=log_prob,
-                        advantages=advantages,
-                        response_mask=response_mask,
-                        cliprange=clip_ratio,
-                        cliprange_low=clip_ratio_low,
-                        cliprange_high=clip_ratio_high,
-                        clip_ratio_c=clip_ratio_c,
-                        loss_agg_mode=loss_agg_mode,
-                    )
+                pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
+                    old_log_prob=old_log_prob,
+                    log_prob=log_prob,
+                    advantages=advantages,
+                    response_mask=response_mask,
+                    cliprange=clip_ratio,
+                    cliprange_low=clip_ratio_low,
+                    cliprange_high=clip_ratio_high,
+                    clip_ratio_c=clip_ratio_c,
+                    loss_agg_mode=loss_agg_mode,
+                )
                 policy_loss = pg_loss
             if calculate_entropy:
                 entropy = output["entropy"][:, -response_length - 1 : -1].contiguous()

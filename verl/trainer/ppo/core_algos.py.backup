@@ -521,139 +521,6 @@ def agg_loss(loss_mat: torch.Tensor, loss_mask: torch.Tensor, loss_agg_mode: str
     return loss
 
 
-def apply_ema_smoothing(
-    raw_weights: torch.Tensor,
-    ema_weights_state: dict,
-    sequence_ids: list,
-    response_mask: torch.Tensor,
-    beta: float = 0.9,
-) -> tuple[torch.Tensor, dict]:
-    """
-    Apply EMA smoothing to importance weights.
-    
-    Args:
-        raw_weights: Raw importance weights, shape (batch_size, response_length)
-        ema_weights_state: Dictionary storing EMA state for each sequence
-        sequence_ids: List of sequence IDs for current batch
-        response_mask: Mask for valid tokens, shape (batch_size, response_length)
-        beta: EMA smoothing factor
-        
-    Returns:
-        smoothed_weights: EMA smoothed weights, same shape as raw_weights
-        ema_metrics: Dictionary of metrics for logging
-    """
-    smoothed_weights = raw_weights.clone()
-    batch_size, seq_len = raw_weights.shape
-    
-    # Initialize metrics
-    variance_reductions = []
-    smoothing_effects = []
-    
-    for i, seq_id in enumerate(sequence_ids):
-        if seq_id not in ema_weights_state:
-            # Initialize EMA state for new sequence
-            ema_weights_state[seq_id] = {
-                'prev_weights': torch.ones_like(raw_weights[i]),
-                'step_count': 0
-            }
-        
-        # Get previous EMA weights for this sequence
-        prev_ema = ema_weights_state[seq_id]['prev_weights'].to(raw_weights.device)
-        
-        # Apply EMA smoothing: w'_{i,t} = β * w_{i,t} + (1 - β) * w'_{i,t-1}
-        current_raw = raw_weights[i]
-        current_smoothed = beta * current_raw + (1 - beta) * prev_ema
-        
-        # Update smoothed weights
-        smoothed_weights[i] = current_smoothed
-        
-        # Update EMA state
-        ema_weights_state[seq_id]['prev_weights'] = current_smoothed.detach().cpu()
-        ema_weights_state[seq_id]['step_count'] += 1
-        
-        # Compute metrics for this sequence (only for valid tokens)
-        mask = response_mask[i]
-        if mask.sum() > 0:
-            raw_var = (current_raw * mask).var()
-            smoothed_var = (current_smoothed * mask).var()
-            if raw_var > 0:
-                variance_reduction = (raw_var - smoothed_var) / raw_var
-                variance_reductions.append(variance_reduction.item())
-            
-            smoothing_effect = torch.norm(current_raw - current_smoothed, p=2) * mask.sum() / mask.sum()
-            smoothing_effects.append(smoothing_effect.item())
-    
-    # Compute overall metrics
-    raw_variance = (raw_weights * response_mask).var()
-    smoothed_variance = (smoothed_weights * response_mask).var()
-    
-    # Calculate additional metrics for detailed analysis
-    weight_diff = raw_weights - smoothed_weights
-    relative_change = torch.abs(weight_diff) / (torch.abs(raw_weights) + 1e-8)
-    
-    # Stability metrics
-    raw_weights_masked = raw_weights * response_mask
-    smoothed_weights_masked = smoothed_weights * response_mask
-    
-    # Percentile analysis for paper
-    raw_weights_flat = raw_weights_masked[response_mask > 0]
-    smoothed_weights_flat = smoothed_weights_masked[response_mask > 0]
-    
-    if len(raw_weights_flat) > 0:
-        raw_p95 = torch.quantile(raw_weights_flat, 0.95).item()
-        raw_p05 = torch.quantile(raw_weights_flat, 0.05).item()
-        smoothed_p95 = torch.quantile(smoothed_weights_flat, 0.95).item()
-        smoothed_p05 = torch.quantile(smoothed_weights_flat, 0.05).item()
-        
-        # Range reduction
-        raw_range = raw_p95 - raw_p05
-        smoothed_range = smoothed_p95 - smoothed_p05
-        range_reduction = (raw_range - smoothed_range) / (raw_range + 1e-8)
-    else:
-        raw_p95 = raw_p05 = smoothed_p95 = smoothed_p05 = 0.0
-        range_reduction = 0.0
-
-    ema_metrics = {
-        # === Core Variance Metrics ===
-        'ema/raw_weights_variance': raw_variance.item(),
-        'ema/smoothed_weights_variance': smoothed_variance.item(),
-        'ema/variance_reduction_ratio': (raw_variance / (smoothed_variance + 1e-8)).item(),
-        'ema/variance_reduction_absolute': (raw_variance - smoothed_variance).item(),
-        
-        # === Basic Statistics ===
-        'ema/raw_weights_mean': (raw_weights * response_mask).mean().item(),
-        'ema/raw_weights_std': (raw_weights * response_mask).std().item(),
-        'ema/smoothed_weights_mean': (smoothed_weights * response_mask).mean().item(),
-        'ema/smoothed_weights_std': (smoothed_weights * response_mask).std().item(),
-        
-        # === Difference Metrics ===
-        'ema/weights_diff_l2': torch.norm(weight_diff, p=2).item(),
-        'ema/weights_diff_l1': torch.norm(weight_diff, p=1).item(),
-        'ema/weights_diff_max': torch.max(torch.abs(weight_diff)).item(),
-        'ema/relative_change_mean': (relative_change * response_mask).mean().item(),
-        'ema/relative_change_max': torch.max(relative_change * response_mask).item(),
-        
-        # === Percentile Analysis ===
-        'ema/raw_weights_p95': raw_p95,
-        'ema/raw_weights_p05': raw_p05,
-        'ema/smoothed_weights_p95': smoothed_p95,
-        'ema/smoothed_weights_p05': smoothed_p05,
-        'ema/range_reduction': range_reduction,
-        
-        # === Configuration & State ===
-        'ema/beta': beta,
-        'ema/active_sequences': len(ema_weights_state),
-        'ema/avg_variance_reduction': np.mean(variance_reductions) if variance_reductions else 0.0,
-        'ema/avg_smoothing_effect': np.mean(smoothing_effects) if smoothing_effects else 0.0,
-        
-        # === Stability Indicators ===
-        'ema/smoothing_strength': 1.0 - (smoothed_variance / (raw_variance + 1e-8)).item(),
-        'ema/use_ema': True,
-    }
-    
-    return smoothed_weights, ema_metrics
-
-
 def compute_policy_loss(
     old_log_prob,
     log_prob,
@@ -667,42 +534,9 @@ def compute_policy_loss(
 ):
     """
     Compute the clipped policy objective and related metrics for PPO.
-    This is the original version without EMA smoothing.
-    """
-    return compute_policy_loss_with_ema(
-        old_log_prob=old_log_prob,
-        log_prob=log_prob,
-        advantages=advantages,
-        response_mask=response_mask,
-        cliprange=cliprange,
-        cliprange_low=cliprange_low,
-        cliprange_high=cliprange_high,
-        clip_ratio_c=clip_ratio_c,
-        loss_agg_mode=loss_agg_mode,
-        ema_weights_state=None,
-        sequence_ids=None,
-        beta=None,
-        use_ema=False,
-    )[:-1]  # Remove ema_metrics from return
 
-
-def compute_policy_loss_with_ema(
-    old_log_prob,
-    log_prob,
-    advantages,
-    response_mask,
-    cliprange=None,
-    cliprange_low=None,
-    cliprange_high=None,
-    clip_ratio_c=3.0,
-    loss_agg_mode: str = "token-mean",
-    ema_weights_state=None,
-    sequence_ids=None,
-    beta=0.9,
-    use_ema=True,
-):
-    """
-    Compute the clipped policy objective and related metrics for PPO with optional EMA smoothing.
+    Adapted from
+    https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py#L1122
 
     Args:
         old_log_prob (torch.Tensor):
@@ -725,56 +559,20 @@ def compute_policy_loss_with_ema(
             Defaults to 3.0.
         loss_agg_mode (str, optional):
             Aggregation mode for `agg_loss`. Defaults to "token-mean".
-        ema_weights_state (dict, optional):
-            Dictionary storing EMA state for each sequence. Required if use_ema=True.
-        sequence_ids (list, optional):
-            List of sequence IDs for current batch. Required if use_ema=True.
-        beta (float, optional):
-            EMA smoothing factor. Defaults to 0.9.
-        use_ema (bool, optional):
-            Whether to apply EMA smoothing to importance weights. Defaults to True.
-            
-    Returns:
-        pg_loss: Policy gradient loss
-        pg_clipfrac: Fraction of clipped importance weights
-        ppo_kl: KL divergence between old and new policy
-        pg_clipfrac_lower: Lower clipping fraction
-        ema_metrics: Dictionary of EMA-related metrics (only if use_ema=True)
     """
-    assert clip_ratio_c > 1.0, f"The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0, but get the value: {clip_ratio_c}."
+    assert clip_ratio_c > 1.0, "The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0," + f" but get the value: {clip_ratio_c}."
 
     negative_approx_kl = log_prob - old_log_prob
-    raw_ratio = torch.exp(negative_approx_kl)  # Raw importance weights w_{i,t}
+    ratio = torch.exp(negative_approx_kl)
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
 
-    # Apply EMA smoothing if enabled
-    ema_metrics = {}
-    if use_ema and ema_weights_state is not None and sequence_ids is not None:
-        ratio, ema_metrics = apply_ema_smoothing(
-            raw_weights=raw_ratio,
-            ema_weights_state=ema_weights_state,
-            sequence_ids=sequence_ids,
-            response_mask=response_mask,
-            beta=beta,
-        )
-    else:
-        ratio = raw_ratio
-        # Add basic metrics even without EMA
-        ema_metrics = {
-            'ema/raw_weights_variance': (raw_ratio * response_mask).var().item(),
-            'ema/raw_weights_mean': (raw_ratio * response_mask).mean().item(),
-            'ema/raw_weights_std': (raw_ratio * response_mask).std().item(),
-            'ema/use_ema': False,
-        }
-
-    # Compute policy gradient loss using (possibly smoothed) importance weights
     pg_losses1 = -advantages * ratio
     if cliprange_low is None:
         cliprange_low = cliprange
     if cliprange_high is None:
         cliprange_high = cliprange
-    pg_losses2 = -advantages * torch.clamp(ratio, 1 - cliprange_low, 1 + cliprange_high)
-    clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
+    pg_losses2 = -advantages * torch.clamp(ratio, 1 - cliprange_low, 1 + cliprange_high)  # - clip(ratio, 1-cliprange, 1+cliprange) * A
+    clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)  # max(-ratio * A, -clip(ratio, 1-cliprange, 1+cliprange) * A)
     pg_clipfrac = verl_F.masked_mean(torch.gt(pg_losses2, pg_losses1).float(), response_mask)
 
     pg_losses3 = -advantages * clip_ratio_c
@@ -784,7 +582,7 @@ def compute_policy_loss_with_ema(
     pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
     pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
 
-    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, ema_metrics
+    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 
 def compute_entropy_loss(logits, response_mask, loss_agg_mode: str = "token-mean"):
