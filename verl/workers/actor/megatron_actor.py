@@ -362,8 +362,16 @@ class MegatronPPOActor(BasePPOActor):
                 
                 # Get sequence IDs for EMA tracking
                 sequence_ids = None
-                if self.use_ema_smoothing and "uid" in data:
-                    sequence_ids = data["uid"] if isinstance(data["uid"], list) else data["uid"].tolist()
+                if self.use_ema_smoothing:
+                    # Try to get uid from the micro batch data
+                    if "uid" in data:
+                        sequence_ids = data["uid"] if isinstance(data["uid"], list) else data["uid"].tolist()
+                    else:
+                        # Generate temporary sequence IDs for this micro batch
+                        batch_size = old_log_prob.shape[0]
+                        sequence_ids = [f"temp_seq_{i}" for i in range(batch_size)]
+                        if torch.distributed.get_rank() == 0:
+                            print(f"🎯 [EMA-GRPO] Warning: No uid found, using temporary sequence IDs")
 
                 # Use EMA-enabled policy loss computation
                 if self.use_ema_smoothing and sequence_ids is not None:
