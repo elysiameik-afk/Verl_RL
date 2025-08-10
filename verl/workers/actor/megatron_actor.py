@@ -142,7 +142,7 @@ class MegatronPPOActor(BasePPOActor):
         self.use_ema_smoothing = self.config.get("use_ema_smoothing", False)
         self.ema_beta = self.config.get("ema_beta", 0.9)
         if torch.distributed.get_rank() == 0:
-            print(f"Megatron Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta}")
+            print(f"🎯 [EMA-GRPO] Megatron Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta}")
 
     def _validate_config(self, config) -> None:
         """Validate config options not implemented for Megatron backend"""
@@ -382,8 +382,8 @@ class MegatronPPOActor(BasePPOActor):
                         beta=self.ema_beta,
                         use_ema=True,
                     )
-                    # Add EMA metrics to the metrics dictionary
-                    metrics.update(ema_metrics)
+                    # Add EMA metrics to the metrics dictionary using append_to_dict
+                    append_to_dict(metrics, ema_metrics)
                 else:
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
                         old_log_prob=old_log_prob,

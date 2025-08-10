@@ -79,7 +79,7 @@ class DataParallelPPOActor(BasePPOActor):
         self.use_ema_smoothing = self.config.get("use_ema_smoothing", False)
         self.ema_beta = self.config.get("ema_beta", 0.9)
         if torch.distributed.get_rank() == 0:
-            print(f"Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta}")
+            print(f"🎯 [EMA-GRPO] Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta}")
 
     def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -417,8 +417,10 @@ class DataParallelPPOActor(BasePPOActor):
                             beta=self.ema_beta,
                             use_ema=True,
                         )
-                        # Add EMA metrics to the metrics dictionary
-                        metrics.update(ema_metrics)
+                        # Add EMA metrics to the metrics dictionary using append_to_dict
+                        append_to_dict(metrics, ema_metrics)
+                        if torch.distributed.get_rank() == 0 and len(metrics.get('ema/variance_reduction_ratio', [])) == 1:
+                            print(f"🎯 [EMA-GRPO] Added EMA metrics: variance_reduction={ema_metrics['ema/variance_reduction_ratio']:.4f}, smoothing_strength={ema_metrics['ema/smoothing_strength']:.4f}")
                     else:
                         pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
                             old_log_prob=old_log_prob,
