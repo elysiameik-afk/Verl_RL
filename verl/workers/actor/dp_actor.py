@@ -339,9 +339,13 @@ class DataParallelPPOActor(BasePPOActor):
 
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
-        if has_multi_modal_inputs:
+        if has_multi_modal_inputs or "uid" in data.non_tensor_batch:
             num_mini_batches = data.batch.batch_size[0] // self.config.ppo_mini_batch_size
-            non_tensor_select_keys = ["multi_modal_inputs"]
+            non_tensor_select_keys = []
+            if has_multi_modal_inputs:
+                non_tensor_select_keys.append("multi_modal_inputs")
+            if "uid" in data.non_tensor_batch:
+                non_tensor_select_keys.append("uid")
             dataloader = data.select(select_keys, non_tensor_select_keys).chunk(num_mini_batches)
         else:
             dataloader = batch.split(self.config.ppo_mini_batch_size)
@@ -399,7 +403,10 @@ class DataParallelPPOActor(BasePPOActor):
                     sequence_ids = None
                     if self.use_ema_smoothing:
                         # Try to get uid from the micro batch data
-                        if "uid" in data:
+                        if hasattr(data, 'non_tensor_batch') and "uid" in data.non_tensor_batch:
+                            uid_array = data.non_tensor_batch["uid"]
+                            sequence_ids = uid_array.tolist() if hasattr(uid_array, 'tolist') else list(uid_array)
+                        elif "uid" in data:
                             sequence_ids = data["uid"] if isinstance(data["uid"], list) else data["uid"].tolist()
                         else:
                             # Generate temporary sequence IDs for this micro batch

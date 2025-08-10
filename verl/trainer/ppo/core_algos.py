@@ -552,8 +552,9 @@ def apply_ema_smoothing(
     for i, seq_id in enumerate(sequence_ids):
         if seq_id not in ema_weights_state:
             # Initialize EMA state for new sequence
+            # Use the current raw weights as initial state instead of ones
             ema_weights_state[seq_id] = {
-                'prev_weights': torch.ones_like(raw_weights[i]),
+                'prev_weights': raw_weights[i].detach().cpu().clone(),
                 'step_count': 0
             }
         
