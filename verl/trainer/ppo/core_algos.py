@@ -611,137 +611,38 @@ def apply_token_level_ema_smoothing(
             print(f"  token级平滑强度: {torch.norm(raw_seq - smoothed_seq).item():.6f}")
             print(f"  beta={beta} (时序平滑因子)")
     
-    """
-    Apply EMA smoothing to importance weights.
-    
-    Args:
-        raw_weights: Raw importance weights, shape (batch_size, response_length)
-        ema_weights_state: Dictionary storing EMA state for each sequence
-        sequence_ids: List of sequence IDs for current batch
-        response_mask: Mask for valid tokens, shape (batch_size, response_length)
-        beta: EMA smoothing factor
-        
-    Returns:
-        smoothed_weights: EMA smoothed weights, same shape as raw_weights
-        ema_metrics: Dictionary of metrics for logging
-    """
-    smoothed_weights = raw_weights.clone()
-    batch_size, seq_len = raw_weights.shape
-    
-    # Initialize metrics
-    variance_reductions = []
-    smoothing_effects = []
-    
-    for i, seq_id in enumerate(sequence_ids):
-        if seq_id not in ema_weights_state:
-            # Initialize EMA state for new sequence
-            # Use the current raw weights as initial state instead of ones
-            ema_weights_state[seq_id] = {
-                'prev_weights': raw_weights[i].detach().cpu().clone(),
-                'step_count': 0
-            }
-        
-        # Get previous EMA weights for this sequence
-        prev_ema = ema_weights_state[seq_id]['prev_weights'].to(raw_weights.device)
-        
-        # Apply EMA smoothing: w'_{i,t} = β * w_{i,t} + (1 - β) * w'_{i,t-1}
-        current_raw = raw_weights[i]
-        current_smoothed = beta * current_raw + (1 - beta) * prev_ema
-        
-        # Debug: 打印详细信息（仅第一个序列，避免过多输出）
-        if i == 0 and torch.distributed.get_rank() == 0:
-            step_count = ema_weights_state[seq_id]['step_count']
-            print(f"🔍 [EMA-DEBUG] seq_id={seq_id}, step={step_count}")
-            print(f"  raw_weights范围: [{current_raw.min().item():.4f}, {current_raw.max().item():.4f}]")
-            print(f"  prev_ema范围: [{prev_ema.min().item():.4f}, {prev_ema.max().item():.4f}]")
-            print(f"  smoothed范围: [{current_smoothed.min().item():.4f}, {current_smoothed.max().item():.4f}]")
-            print(f"  beta={beta}, 权重差异={torch.norm(current_raw - current_smoothed).item():.6f}")
-        
-        # Update smoothed weights
-        smoothed_weights[i] = current_smoothed
-        
-        # Update EMA state
-        ema_weights_state[seq_id]['prev_weights'] = current_smoothed.detach().cpu()
-        ema_weights_state[seq_id]['step_count'] += 1
-        
-        # Compute metrics for this sequence (only for valid tokens)
-        mask = response_mask[i]
-        if mask.sum() > 0:
-            raw_var = (current_raw * mask).var()
-            smoothed_var = (current_smoothed * mask).var()
-            if raw_var > 0:
-                variance_reduction = (raw_var - smoothed_var) / raw_var
-                variance_reductions.append(variance_reduction.item())
-            
-            smoothing_effect = torch.norm(current_raw - current_smoothed, p=2) * mask.sum() / mask.sum()
-            smoothing_effects.append(smoothing_effect.item())
-    
-    # Compute overall metrics
+    # 计算整体指标
     raw_variance = (raw_weights * response_mask).var()
     smoothed_variance = (smoothed_weights * response_mask).var()
+    overall_variance_reduction = raw_variance / (smoothed_variance + 1e-8)
     
-    # Calculate additional metrics for detailed analysis
-    weight_diff = raw_weights - smoothed_weights
-    relative_change = torch.abs(weight_diff) / (torch.abs(raw_weights) + 1e-8)
-    
-    # Stability metrics
-    raw_weights_masked = raw_weights * response_mask
-    smoothed_weights_masked = smoothed_weights * response_mask
-    
-    # Percentile analysis for paper
-    raw_weights_flat = raw_weights_masked[response_mask > 0]
-    smoothed_weights_flat = smoothed_weights_masked[response_mask > 0]
-    
-    if len(raw_weights_flat) > 0:
-        raw_p95 = torch.quantile(raw_weights_flat, 0.95).item()
-        raw_p05 = torch.quantile(raw_weights_flat, 0.05).item()
-        smoothed_p95 = torch.quantile(smoothed_weights_flat, 0.95).item()
-        smoothed_p05 = torch.quantile(smoothed_weights_flat, 0.05).item()
-        
-        # Range reduction
-        raw_range = raw_p95 - raw_p05
-        smoothed_range = smoothed_p95 - smoothed_p05
-        range_reduction = (raw_range - smoothed_range) / (raw_range + 1e-8)
-    else:
-        raw_p95 = raw_p05 = smoothed_p95 = smoothed_p05 = 0.0
-        range_reduction = 0.0
-
+    # 编译最终指标
     ema_metrics = {
-        # === Core Variance Metrics ===
+        # 核心方差指标
         'ema/raw_weights_variance': raw_variance.item(),
         'ema/smoothed_weights_variance': smoothed_variance.item(),
-        'ema/variance_reduction_ratio': (raw_variance / (smoothed_variance + 1e-8)).item(),
-        'ema/variance_reduction_absolute': (raw_variance - smoothed_variance).item(),
+        'ema/variance_reduction_ratio': overall_variance_reduction.item(),
         
-        # === Basic Statistics ===
+        # 平滑效果指标
+        'ema/avg_sequence_variance_reduction': np.mean(sequence_variance_reductions) if sequence_variance_reductions else 1.0,
+        'ema/avg_smoothing_effect': np.mean(sequence_smoothing_effects) if sequence_smoothing_effects else 0.0,
+        'ema/smoothing_strength': np.mean(sequence_smoothing_effects) if sequence_smoothing_effects else 0.0,
+        
+        # 基础统计
         'ema/raw_weights_mean': (raw_weights * response_mask).mean().item(),
-        'ema/raw_weights_std': (raw_weights * response_mask).std().item(),
         'ema/smoothed_weights_mean': (smoothed_weights * response_mask).mean().item(),
+        'ema/raw_weights_std': (raw_weights * response_mask).std().item(),
         'ema/smoothed_weights_std': (smoothed_weights * response_mask).std().item(),
         
-        # === Difference Metrics ===
-        'ema/weights_diff_l2': torch.norm(weight_diff, p=2).item(),
-        'ema/weights_diff_l1': torch.norm(weight_diff, p=1).item(),
-        'ema/weights_diff_max': torch.max(torch.abs(weight_diff)).item(),
-        'ema/relative_change_mean': (relative_change * response_mask).mean().item(),
-        'ema/relative_change_max': torch.max(relative_change * response_mask).item(),
+        # 差异指标
+        'ema/weights_diff_l2': torch.norm(raw_weights - smoothed_weights, p=2).item(),
+        'ema/weights_diff_l1': torch.norm(raw_weights - smoothed_weights, p=1).item(),
         
-        # === Percentile Analysis ===
-        'ema/raw_weights_p95': raw_p95,
-        'ema/raw_weights_p05': raw_p05,
-        'ema/smoothed_weights_p95': smoothed_p95,
-        'ema/smoothed_weights_p05': smoothed_p05,
-        'ema/range_reduction': range_reduction,
-        
-        # === Configuration & State ===
+        # 配置信息
         'ema/beta': beta,
-        'ema/active_sequences': len(ema_weights_state),
-        'ema/avg_variance_reduction': np.mean(variance_reductions) if variance_reductions else 0.0,
-        'ema/avg_smoothing_effect': np.mean(smoothing_effects) if smoothing_effects else 0.0,
-        
-        # === Stability Indicators ===
-        'ema/smoothing_strength': 1.0 - (smoothed_variance / (raw_variance + 1e-8)).item(),
         'ema/use_ema': True,
+        'ema/processed_sequences': batch_size,
+        'ema/total_valid_tokens': response_mask.sum().item(),
     }
     
     return smoothed_weights, ema_metrics
