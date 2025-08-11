@@ -137,12 +137,11 @@ class MegatronPPOActor(BasePPOActor):
         print(config)
         config.finalize_model_grads_func = finalize_model_grads
         
-        # Initialize EMA state for importance weight smoothing
-        self.ema_weights_state = {}
+        # Initialize token-level EMA smoothing config (序列内token级时序平滑)
         self.use_ema_smoothing = self.config.get("use_ema_smoothing", False)
         self.ema_beta = self.config.get("ema_beta", 0.9)
         if torch.distributed.get_rank() == 0:
-            print(f"🎯 [EMA-GRPO] Megatron Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta}")
+            print(f"🎯 [TOKEN-EMA-GRPO] Megatron Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta} (序列内token级时序平滑)")
 
     def _validate_config(self, config) -> None:
         """Validate config options not implemented for Megatron backend"""
@@ -367,21 +366,11 @@ class MegatronPPOActor(BasePPOActor):
                 clip_ratio_high = self.config.clip_ratio_high if self.config.clip_ratio_high is not None else clip_ratio
                 clip_ratio_c = meta_info["clip_ratio_c"]
                 
-                # Get sequence IDs for EMA tracking
-                sequence_ids = None
+                # Use token-level EMA-enabled policy loss computation
                 if self.use_ema_smoothing:
-                    # Try to get uid from the micro batch data
-                    if "uid" in data:
-                        sequence_ids = data["uid"] if isinstance(data["uid"], list) else data["uid"].tolist()
-                    else:
-                        # Generate temporary sequence IDs for this micro batch
-                        batch_size = old_log_prob.shape[0]
-                        sequence_ids = [f"temp_seq_{i}" for i in range(batch_size)]
-                        if torch.distributed.get_rank() == 0:
-                            print(f"🎯 [EMA-GRPO] Warning: No uid found, using temporary sequence IDs")
-
-                # Use EMA-enabled policy loss computation
-                if self.use_ema_smoothing and sequence_ids is not None:
+                    if torch.distributed.get_rank() == 0:
+                        print(f"🎯 [TOKEN-EMA-GRPO] Megatron应用序列内token级时序平滑, beta={self.ema_beta}")
+                    
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, ema_metrics = compute_policy_loss_with_ema(
                         old_log_prob=old_log_prob,
                         log_prob=log_prob,
@@ -392,8 +381,6 @@ class MegatronPPOActor(BasePPOActor):
                         cliprange_high=clip_ratio_high,
                         clip_ratio_c=clip_ratio_c,
                         loss_agg_mode=loss_agg_mode,
-                        ema_weights_state=self.ema_weights_state,
-                        sequence_ids=sequence_ids,
                         beta=self.ema_beta,
                         use_ema=True,
                     )

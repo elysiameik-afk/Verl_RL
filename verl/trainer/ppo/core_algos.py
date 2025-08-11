@@ -521,13 +521,96 @@ def agg_loss(loss_mat: torch.Tensor, loss_mask: torch.Tensor, loss_agg_mode: str
     return loss
 
 
-def apply_ema_smoothing(
+def apply_token_level_ema_smoothing(
     raw_weights: torch.Tensor,
-    ema_weights_state: dict,
-    sequence_ids: list,
     response_mask: torch.Tensor,
     beta: float = 0.9,
 ) -> tuple[torch.Tensor, dict]:
+    """
+    Apply token-level EMA smoothing within each sequence.
+    
+    For each sequence i, apply EMA along the token dimension t:
+    w'[i,t] = β × w[i,t] + (1-β) × w'[i,t-1]
+    
+    This is the core innovation: "Temporal Smoothing of Importance Weights"
+    
+    Args:
+        raw_weights: [batch_size, seq_len] - Raw importance weights w[i,t]
+        response_mask: [batch_size, seq_len] - Mask for valid response tokens
+        beta: float - EMA smoothing factor (0 < β ≤ 1)
+    
+    Returns:
+        tuple: (smoothed_weights, ema_metrics)
+    """
+    import numpy as np
+    
+    batch_size, seq_len = raw_weights.shape
+    smoothed_weights = torch.zeros_like(raw_weights)
+    
+    sequence_variance_reductions = []
+    sequence_smoothing_effects = []
+    
+    # 对每个序列应用token级EMA
+    for i in range(batch_size):
+        sequence_mask = response_mask[i]  # [seq_len]
+        sequence_weights = raw_weights[i]  # [seq_len]
+        smoothed_sequence = torch.zeros_like(sequence_weights)
+        
+        # 找到有效token位置
+        valid_positions = torch.where(sequence_mask > 0)[0]
+        if len(valid_positions) == 0:
+            smoothed_weights[i] = sequence_weights
+            continue
+            
+        # 初始化第一个有效token: w'[i,0] = w[i,0]
+        first_pos = valid_positions[0].item()
+        smoothed_sequence[first_pos] = sequence_weights[first_pos]
+        
+        # 对后续有效token应用EMA: w'[i,t] = β × w[i,t] + (1-β) × w'[i,t-1]
+        prev_smoothed = smoothed_sequence[first_pos]
+        for pos_idx in range(1, len(valid_positions)):
+            t = valid_positions[pos_idx].item()
+            current_raw = sequence_weights[t]
+            current_smoothed = beta * current_raw + (1 - beta) * prev_smoothed
+            smoothed_sequence[t] = current_smoothed
+            prev_smoothed = current_smoothed
+        
+        # 复制无效token
+        invalid_mask = sequence_mask == 0
+        smoothed_sequence[invalid_mask] = sequence_weights[invalid_mask]
+        
+        smoothed_weights[i] = smoothed_sequence
+        
+        # 计算每个序列的指标
+        if len(valid_positions) > 1:
+            valid_raw = sequence_weights[valid_positions]
+            valid_smoothed = smoothed_sequence[valid_positions]
+            
+            raw_var = valid_raw.var()
+            smoothed_var = valid_smoothed.var()
+            
+            if raw_var > 1e-8:
+                var_reduction = raw_var / (smoothed_var + 1e-8)
+                sequence_variance_reductions.append(var_reduction.item())
+            
+            smoothing_effect = torch.norm(valid_raw - valid_smoothed).item()
+            sequence_smoothing_effects.append(smoothing_effect)
+    
+    # 调试输出：显示token级平滑效果
+    if torch.distributed.get_rank() == 0 and batch_size > 0:
+        i = 0
+        valid_mask = response_mask[i] > 0
+        if valid_mask.sum() > 1:
+            raw_seq = raw_weights[i][valid_mask]
+            smoothed_seq = smoothed_weights[i][valid_mask]
+            print(f"🔍 [TOKEN-EMA] 序列{i} token级时序平滑:")
+            print(f"  有效token数: {valid_mask.sum().item()}")
+            print(f"  原始权重前5个: {raw_seq[:5].tolist()}")
+            print(f"  平滑权重前5个: {smoothed_seq[:5].tolist()}")
+            print(f"  序列内方差变化: {raw_seq.var().item():.6f} → {smoothed_seq.var().item():.6f}")
+            print(f"  token级平滑强度: {torch.norm(raw_seq - smoothed_seq).item():.6f}")
+            print(f"  beta={beta} (时序平滑因子)")
+    
     """
     Apply EMA smoothing to importance weights.
     
@@ -759,11 +842,9 @@ def compute_policy_loss_with_ema(
 
     # Apply EMA smoothing if enabled
     ema_metrics = {}
-    if use_ema and ema_weights_state is not None and sequence_ids is not None:
-        ratio, ema_metrics = apply_ema_smoothing(
+    if use_ema:
+        ratio, ema_metrics = apply_token_level_ema_smoothing(
             raw_weights=raw_ratio,
-            ema_weights_state=ema_weights_state,
-            sequence_ids=sequence_ids,
             response_mask=response_mask,
             beta=beta,
         )
