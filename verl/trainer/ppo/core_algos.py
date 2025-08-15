@@ -585,14 +585,14 @@ def apply_token_level_ema_smoothing(
         if len(valid_positions) > 1:
             valid_raw = sequence_weights[valid_positions]
             valid_smoothed = smoothed_sequence[valid_positions]
-            
+
             raw_var = valid_raw.var()
             smoothed_var = valid_smoothed.var()
-            
+
             if raw_var > 1e-8:
-                var_reduction = raw_var / (smoothed_var + 1e-8)
+                var_reduction = 1.0 - (smoothed_var / (raw_var + 1e-8))
                 sequence_variance_reductions.append(var_reduction.item())
-            
+
             smoothing_effect = torch.norm(valid_raw - valid_smoothed).item()
             sequence_smoothing_effects.append(smoothing_effect)
     
@@ -611,33 +611,36 @@ def apply_token_level_ema_smoothing(
             print(f"  token级平滑强度: {torch.norm(raw_seq - smoothed_seq).item():.6f}")
             print(f"  beta={beta} (时序平滑因子)")
     
-    # 计算整体指标
-    raw_variance = (raw_weights * response_mask).var()
-    smoothed_variance = (smoothed_weights * response_mask).var()
-    overall_variance_reduction = raw_variance / (smoothed_variance + 1e-8)
-    
+    # 计算整体指标（只对有效token）
+    valid_mask = response_mask > 0
+    valid_raw_weights = raw_weights[valid_mask]
+    valid_smoothed_weights = smoothed_weights[valid_mask]
+
+    raw_variance = valid_raw_weights.var()
+    smoothed_variance = valid_smoothed_weights.var()
+    overall_variance_reduction = 1.0 - (smoothed_variance / (raw_variance + 1e-8))
+
     # 编译最终指标
     ema_metrics = {
         # 核心方差指标
         'ema/raw_weights_variance': raw_variance.item(),
         'ema/smoothed_weights_variance': smoothed_variance.item(),
         'ema/variance_reduction_ratio': overall_variance_reduction.item(),
-        
+
         # 平滑效果指标
-        'ema/avg_sequence_variance_reduction': np.mean(sequence_variance_reductions) if sequence_variance_reductions else 1.0,
-        'ema/avg_smoothing_effect': np.mean(sequence_smoothing_effects) if sequence_smoothing_effects else 0.0,
-        'ema/smoothing_strength': np.mean(sequence_smoothing_effects) if sequence_smoothing_effects else 0.0,
-        
+        'ema/avg_sequence_variance_reduction': np.mean(sequence_variance_reductions) if sequence_variance_reductions else 0.0,
+        'ema/avg_sequence_diff_l2': np.mean(sequence_smoothing_effects) if sequence_smoothing_effects else 0.0,
+
         # 基础统计
-        'ema/raw_weights_mean': (raw_weights * response_mask).mean().item(),
-        'ema/smoothed_weights_mean': (smoothed_weights * response_mask).mean().item(),
-        'ema/raw_weights_std': (raw_weights * response_mask).std().item(),
-        'ema/smoothed_weights_std': (smoothed_weights * response_mask).std().item(),
-        
+        'ema/raw_weights_mean': valid_raw_weights.mean().item(),
+        'ema/smoothed_weights_mean': valid_smoothed_weights.mean().item(),
+        'ema/raw_weights_std': valid_raw_weights.std().item(),
+        'ema/smoothed_weights_std': valid_smoothed_weights.std().item(),
+
         # 差异指标
-        'ema/weights_diff_l2': torch.norm(raw_weights - smoothed_weights, p=2).item(),
-        'ema/weights_diff_l1': torch.norm(raw_weights - smoothed_weights, p=1).item(),
-        
+        'ema/weights_diff_l2': torch.norm(valid_raw_weights - valid_smoothed_weights, p=2).item(),
+        'ema/weights_diff_l1': torch.norm(valid_raw_weights - valid_smoothed_weights, p=1).item(),
+
         # 配置信息
         'ema/beta': beta,
         'ema/use_ema': True,
