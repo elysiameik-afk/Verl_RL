@@ -37,7 +37,7 @@ def test_ema_smoothing():
     print(f"平滑后权重方差: {ema_metrics['ema/smoothed_weights_variance']:.6f}")
     print(f"平滑后权重均值: {ema_metrics['ema/smoothed_weights_mean']:.6f}")
     print(f"方差降低比例: {ema_metrics['ema/variance_reduction_ratio']:.6f}")
-    print(f"平滑强度: {ema_metrics['ema/smoothing_strength']:.6f}")
+    print(f"平滑强度: {ema_metrics['ema/avg_sequence_diff_l2']:.6f}")
     
     # 测试多步EMA
     print("\n=== 测试多步EMA ===")
@@ -128,7 +128,7 @@ def test_different_beta_values():
         )
         
         print(f"β={beta:.2f}: 方差降低比例={ema_metrics['ema/variance_reduction_ratio']:.4f}, "
-              f"平滑强度={ema_metrics['ema/smoothing_strength']:.4f}")
+              f"平滑强度={ema_metrics['ema/avg_sequence_diff_l2']:.4f}")
     
     return True
 

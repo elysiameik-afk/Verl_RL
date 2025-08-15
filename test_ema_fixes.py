@@ -54,7 +54,7 @@ def test_ema_initialization_fix():
     print(f"第一步平滑权重:\n{smoothed_weights_1}")
     print(f"第一步EMA指标:")
     print(f"  variance_reduction_ratio: {ema_metrics_1['ema/variance_reduction_ratio']:.6f}")
-    print(f"  smoothing_strength: {ema_metrics_1['ema/smoothing_strength']:.6f}")
+    print(f"  avg_sequence_diff_l2: {ema_metrics_1['ema/avg_sequence_diff_l2']:.6f}")
     
     # 第二步EMA
     print(f"\n第二步原始权重:\n{raw_weights_2}")
@@ -71,7 +71,7 @@ def test_ema_initialization_fix():
     print(f"第二步平滑权重:\n{smoothed_weights_2}")
     print(f"第二步EMA指标:")
     print(f"  variance_reduction_ratio: {ema_metrics_2['ema/variance_reduction_ratio']:.6f}")
-    print(f"  smoothing_strength: {ema_metrics_2['ema/smoothing_strength']:.6f}")
+    print(f"  avg_sequence_diff_l2: {ema_metrics_2['ema/avg_sequence_diff_l2']:.6f}")
     
     # 验证修复效果
     print(f"\n✅ 验证修复效果:")
@@ -80,10 +80,10 @@ def test_ema_initialization_fix():
     else:
         print(f"  ❌ 方差降低比例 <= 1.0: {ema_metrics_2['ema/variance_reduction_ratio']:.6f}")
     
-    if ema_metrics_2['ema/smoothing_strength'] > 0:
-        print(f"  ✓ 平滑强度 > 0: {ema_metrics_2['ema/smoothing_strength']:.6f}")
+    if ema_metrics_2['ema/avg_sequence_diff_l2'] > 0:
+        print(f"  ✓ 平滑强度 > 0: {ema_metrics_2['ema/avg_sequence_diff_l2']:.6f}")
     else:
-        print(f"  ❌ 平滑强度 <= 0: {ema_metrics_2['ema/smoothing_strength']:.6f}")
+        print(f"  ❌ 平滑强度 <= 0: {ema_metrics_2['ema/avg_sequence_diff_l2']:.6f}")
     
     return ema_metrics_2
 

@@ -90,7 +90,7 @@ def test_metrics_aggregation():
             'ema/raw_weights_variance': 2.0 + micro_batch_idx * 0.1,
             'ema/smoothed_weights_variance': 1.5 + micro_batch_idx * 0.05,
             'ema/variance_reduction_ratio': 1.33 + micro_batch_idx * 0.02,
-            'ema/smoothing_strength': 0.25 + micro_batch_idx * 0.01,
+            'ema/avg_sequence_diff_l2': 0.25 + micro_batch_idx * 0.01,
             'ema/beta': 0.9,
             'ema/use_ema': True,
         }
@@ -120,7 +120,7 @@ def test_metrics_aggregation():
         'ema/raw_weights_variance',
         'ema/smoothed_weights_variance', 
         'ema/variance_reduction_ratio',
-        'ema/smoothing_strength',
+        'ema/avg_sequence_diff_l2',
         'ema/beta',
         'ema/use_ema'
     ]

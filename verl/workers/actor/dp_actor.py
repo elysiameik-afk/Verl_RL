@@ -424,7 +424,7 @@ class DataParallelPPOActor(BasePPOActor):
                         # Add EMA metrics to the metrics dictionary using append_to_dict
                         append_to_dict(metrics, ema_metrics)
                         if torch.distributed.get_rank() == 0 and len(metrics.get('ema/variance_reduction_ratio', [])) == 1:
-                            print(f"🎯 [EMA-GRPO] Added EMA metrics: variance_reduction={ema_metrics['ema/variance_reduction_ratio']:.4f}, smoothing_strength={ema_metrics['ema/smoothing_strength']:.4f}")
+                            print(f"🎯 [EMA-GRPO] Added EMA metrics: variance_reduction={ema_metrics['ema/variance_reduction_ratio']:.4f}, avg_sequence_diff_l2={ema_metrics['ema/avg_sequence_diff_l2']:.4f}")
                     else:
                         pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
                             old_log_prob=old_log_prob,

@@ -47,7 +47,7 @@ def test_ema_basic():
     print(f"平滑后权重:\n{smoothed_weights}")
     print(f"平滑后权重方差: {ema_metrics['ema/smoothed_weights_variance']:.6f}")
     print(f"方差降低比例: {ema_metrics['ema/variance_reduction_ratio']:.6f}")
-    print(f"平滑强度: {ema_metrics['ema/smoothing_strength']:.6f}")
+    print(f"平滑强度: {ema_metrics['ema/avg_sequence_diff_l2']:.6f}")
     
     # 第二次平滑（模拟下一步）
     new_raw_weights = torch.tensor([[1.5, 2.0, 2.5, 1.0, 1.8],
@@ -100,7 +100,7 @@ def test_policy_loss():
     print(f"裁剪比例: {pg_clipfrac.item():.6f}")
     print(f"PPO KL: {ppo_kl.item():.6f}")
     print(f"方差降低比例: {ema_metrics['ema/variance_reduction_ratio']:.6f}")
-    print(f"平滑强度: {ema_metrics['ema/smoothing_strength']:.6f}")
+    print(f"平滑强度: {ema_metrics['ema/avg_sequence_diff_l2']:.6f}")
     
     return True
 
