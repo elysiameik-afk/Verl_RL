@@ -48,15 +48,15 @@ except ImportError:
 # 模型配置
 # 如果你想测试你训练好的模型，请将 MODEL_ID 替换为你的检查点路径：
 # MODEL_ID = "/root/autodl-tmp/myverl/ckpts/DAPO/DAPO-Qwen3-0.6b-SingleGPU-DirectRun/global_step_12/actor_inference/"
-# MODEL_ID = "/root/autodl-tmp/myverl/mymodels/qwen3-0.6b"  # 或者你想要测试的Hugging Face模型ID
+MODEL_ID = "/root/autodl-tmp/myverl/mymodels/qwen3-0.6b"  # 或者你想要测试的Hugging Face模型ID
 # MODEL_ID = "/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_KK_few_43/global_step_16/actor_inference/"
-MODEL_ID = "/root/autodl-tmp/myverl/merged_models/qwen3-grpo-final50-28/"
-# MODEL_ID = "/root/autodl-tmp/myverl/mymodels/qwen2.5-0.5b-ins"
+# MODEL_ID = "/root/autodl-tmp/myverl/merged_models/qwen3-grpo-final51-12/"
+# MODEL_ID = "/root/autodl-tmp/myverl/merged_models/qwen3-grpo-EMA-14-12"
 # 输入文件路径 (Parquet文件列表)
 # !!! 重要: 请根据你的实际文件存放位置修改这里的路径 !!!
 BASE_PATH = "/root/autodl-tmp/myverl/data"
 INPUT_PARQUET_PATHS = [
-    os.path.join(BASE_PATH, "kk/3ppl", "test.parquet"),
+    os.path.join(BASE_PATH, "kk/4ppl", "test.parquet"),
     # os.path.join(BASE_PATH, "train_first_95.parquet"),
     # 可以添加更多文件路径进行测试
     # os.path.join(BASE_PATH, "3ppl", "train.parquet"),

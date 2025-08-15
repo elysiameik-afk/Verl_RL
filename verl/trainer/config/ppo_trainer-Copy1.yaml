@@ -201,12 +201,6 @@ actor_rollout_ref:
     # Sequence parallelism size for Ulysses-style model parallelism
     ulysses_sequence_parallel_size: 1
 
-    # Whether to use EMA smoothing for importance weights (for EMA-GRPO)
-    use_ema_smoothing: False
-
-    # EMA smoothing factor β for importance weights (0 < β ≤ 1)
-    ema_beta: 0.9
-
     # checkpoint configs
     checkpoint:
     

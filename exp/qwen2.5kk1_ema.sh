@@ -1,3 +1,4 @@
+@ -0,0 +1,46 @@
 set -x
 
 export VLLM_ATTENTION_BACKEND=XFORMERS
@@ -33,9 +34,9 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
     trainer.project_name=Qwen2.5-0.5-EMA \
-    trainer.experiment_name=GRPO_EMA_beta09_detailed \
+    trainer.experiment_name=GRPO_EMA_5 \
     trainer.n_gpus_per_node=1 \
-    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_EMA_beta09_detailed \
+    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_EMA_5 \
     trainer.nnodes=1 \
     trainer.save_freq=4 \
     trainer.test_freq=1 \

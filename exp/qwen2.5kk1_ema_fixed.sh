@@ -34,13 +34,13 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
     trainer.project_name=Qwen2.5-0.5-EMA \
-    trainer.experiment_name=GRPO_EMA_beta09_FIXED \
+    trainer.experiment_name=GRPO_EMA_8 \
     trainer.n_gpus_per_node=1 \
-    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_EMA_beta09_FIXED \
+    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_EMA_8 \
     trainer.nnodes=1 \
     trainer.save_freq=4 \
     trainer.test_freq=1 \
     trainer.total_epochs=8 \
     reward_model.reward_manager=logic_rl \
     actor_rollout_ref.actor.use_ema_smoothing=True \
-    actor_rollout_ref.actor.ema_beta=0.9
+    actor_rollout_ref.actor.ema_beta=0.7

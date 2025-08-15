@@ -2,13 +2,13 @@ import pandas as pd
 
 # --- 请根据您的实际情况修改这里的变量 ---
 # 输入文件：您的大Parquet文件路径
-input_file_path = "./data/kk/kk2ppl_few/train.parquet"
+input_file_path = "./data/kk/4ppl/test.parquet"
 
 # 输出文件：您想保存的新Parquet文件名
-output_file_path = "train_first_64.parquet"
+output_file_path = "test_first_10.parquet"
 
 # 要截取的数据行数
-num_rows_to_keep = 64
+num_rows_to_keep = 10
 # -----------------------------------------
 
 try:
