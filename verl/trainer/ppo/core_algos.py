@@ -1069,19 +1069,41 @@ def compute_policy_loss_with_innovations(
     # 创新点 2.5: 时序衰减优势塑造
     temporal_weights = torch.ones_like(ratio)
     if use_temporal_decay:
+        all_decay_weights = []
         for i in range(batch_size):
             valid_positions = torch.where(response_mask[i] > 0)[0]
             if len(valid_positions) > 0:
-                decay_weights, decay_metrics = apply_temporal_decay_weighting(
+                decay_weights, _ = apply_temporal_decay_weighting(
                     sequence_length=len(valid_positions),
                     gamma=temporal_decay_gamma,
                     normalize=temporal_decay_normalize,
                 )
                 temporal_weights[i, valid_positions] = decay_weights.to(ratio.device)
+                all_decay_weights.extend(decay_weights.tolist())
+
+        # 计算整体的时序衰减指标
+        if all_decay_weights:
+            decay_metrics = {
+                'temporal_decay/gamma': temporal_decay_gamma,
+                'temporal_decay/normalize': temporal_decay_normalize,
+                'temporal_decay/weight_sum': sum(all_decay_weights),
+                'temporal_decay/weight_mean': np.mean(all_decay_weights),
+                'temporal_decay/weight_std': np.std(all_decay_weights),
+                'temporal_decay/weight_min': min(all_decay_weights),
+                'temporal_decay/weight_max': max(all_decay_weights),
+                'temporal_decay/use_temporal_decay': True,
+            }
+        else:
+            decay_metrics = {
+                'temporal_decay/gamma': temporal_decay_gamma,
+                'temporal_decay/normalize': temporal_decay_normalize,
+                'temporal_decay/weight_mean': 1.0,
+                'temporal_decay/use_temporal_decay': True,
+            }
 
         all_metrics.update(decay_metrics)
         if is_main_process():
-            print(f"🎯 [创新点2.5-时序衰减] 应用时序衰减, gamma={temporal_decay_gamma}")
+            print(f"🎯 [创新点2.5-时序衰减] 应用时序衰减, gamma={temporal_decay_gamma}, 平均权重={decay_metrics['temporal_decay/weight_mean']:.4f}")
 
     # 组合所有权重 (时序衰减作为权重因子，不修改优势)
     final_ratio = ratio * contribution_weights * temporal_weights
