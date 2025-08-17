@@ -28,7 +28,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
-from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_policy_loss_with_ema, kl_penalty
+from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_policy_loss_with_innovations, kl_penalty
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.device import get_device_name, get_torch_device, is_cuda_available, is_npu_available
 from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_
@@ -74,11 +74,24 @@ class DataParallelPPOActor(BasePPOActor):
         )
         self.device_name = get_device_name()
         
-        # Initialize token-level EMA smoothing config (序列内token级时序平滑)
+        # Initialize all innovation configs
         self.use_ema_smoothing = self.config.get("use_ema_smoothing", False)
         self.ema_beta = self.config.get("ema_beta", 0.9)
-        if torch.distributed.get_rank() == 0:
-            print(f"🎯 [TOKEN-EMA-GRPO] Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta} (序列内token级时序平滑)")
+        self.use_gradient_adaptive_weighting = self.config.get("use_gradient_adaptive_weighting", False)
+        self.gradient_weighting_temperature = self.config.get("gradient_weighting_temperature", 1.0)
+        self.use_amic = self.config.get("use_amic", False)
+        self.use_ptrw = self.config.get("use_ptrw", False)
+        self.ptrw_sigma = self.config.get("ptrw_sigma", 0.2)
+        self.use_temporal_decay = self.config.get("use_temporal_decay", False)
+        self.temporal_decay_gamma = self.config.get("temporal_decay_gamma", 0.95)
+        self.temporal_decay_normalize = self.config.get("temporal_decay_normalize", True)
+        self.use_asymmetric_clipping = self.config.get("use_asymmetric_clipping", False)
+        self.clip_ratio_pos = self.config.get("clip_ratio_pos", 0.3)
+        self.clip_ratio_neg = self.config.get("clip_ratio_neg", 0.1)
+
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            print(f"🎯 [创新点配置] EMA={self.use_ema_smoothing}, 梯度自适应={self.use_gradient_adaptive_weighting}, AMIC={self.use_amic}")
+            print(f"🎯 [创新点配置] PTRW={self.use_ptrw}, 时序衰减={self.use_temporal_decay}, 非对称裁剪={self.use_asymmetric_clipping}")
 
     def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -403,40 +416,72 @@ class DataParallelPPOActor(BasePPOActor):
                         calculate_entropy = True
                     entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy)
 
-                    # Use token-level EMA-enabled policy loss computation
-                    if self.use_ema_smoothing:
-                        if torch.distributed.get_rank() == 0:
-                            print(f"🎯 [TOKEN-EMA-GRPO] 应用序列内token级时序平滑, beta={self.ema_beta}")
-                        
-                        pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, ema_metrics = compute_policy_loss_with_ema(
-                            old_log_prob=old_log_prob,
-                            log_prob=log_prob,
-                            advantages=advantages,
-                            response_mask=response_mask,
-                            cliprange=clip_ratio,
-                            cliprange_low=clip_ratio_low,
-                            cliprange_high=clip_ratio_high,
-                            clip_ratio_c=clip_ratio_c,
-                            loss_agg_mode=loss_agg_mode,
-                            beta=self.ema_beta,
-                            use_ema=True,
-                        )
-                        # Add EMA metrics to the metrics dictionary using append_to_dict
-                        append_to_dict(metrics, ema_metrics)
-                        if torch.distributed.get_rank() == 0 and len(metrics.get('ema/variance_reduction_ratio', [])) == 1:
-                            print(f"🎯 [EMA-GRPO] Added EMA metrics: variance_reduction={ema_metrics['ema/variance_reduction_ratio']:.4f}, avg_sequence_diff_l2={ema_metrics['ema/avg_sequence_diff_l2']:.4f}")
-                    else:
-                        pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
-                            old_log_prob=old_log_prob,
-                            log_prob=log_prob,
-                            advantages=advantages,
-                            response_mask=response_mask,
-                            cliprange=clip_ratio,
-                            cliprange_low=clip_ratio_low,
-                            cliprange_high=clip_ratio_high,
-                            clip_ratio_c=clip_ratio_c,
-                            loss_agg_mode=loss_agg_mode,
-                        )
+                    # Use comprehensive innovation-enabled policy loss computation
+                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, innovation_metrics = compute_policy_loss_with_innovations(
+                        old_log_prob=old_log_prob,
+                        log_prob=log_prob,
+                        advantages=advantages,
+                        response_mask=response_mask,
+                        cliprange=clip_ratio,
+                        cliprange_low=clip_ratio_low,
+                        cliprange_high=clip_ratio_high,
+                        clip_ratio_c=clip_ratio_c,
+                        loss_agg_mode=loss_agg_mode,
+                        # 创新点配置
+                        use_ema_smoothing=self.use_ema_smoothing,
+                        ema_beta=self.ema_beta,
+                        use_gradient_adaptive_weighting=self.use_gradient_adaptive_weighting,
+                        gradient_weighting_temperature=self.gradient_weighting_temperature,
+                        use_amic=self.use_amic,
+                        use_ptrw=self.use_ptrw,
+                        ptrw_sigma=self.ptrw_sigma,
+                        use_temporal_decay=self.use_temporal_decay,
+                        temporal_decay_gamma=self.temporal_decay_gamma,
+                        temporal_decay_normalize=self.temporal_decay_normalize,
+                        use_asymmetric_clipping=self.use_asymmetric_clipping,
+                        clip_ratio_pos=self.clip_ratio_pos,
+                        clip_ratio_neg=self.clip_ratio_neg,
+                    )
+
+                    # Add innovation metrics to the metrics dictionary
+                    append_to_dict(metrics, innovation_metrics)
+
+                    # 打印关键指标
+                    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                        active_innovations = []
+                        if self.use_ema_smoothing:
+                            active_innovations.append(f"EMA(β={self.ema_beta})")
+                        if self.use_gradient_adaptive_weighting:
+                            active_innovations.append(f"梯度自适应(T={self.gradient_weighting_temperature})")
+                        if self.use_amic:
+                            active_innovations.append("AMIC")
+                        if self.use_ptrw:
+                            active_innovations.append(f"PTRW(σ={self.ptrw_sigma})")
+                        if self.use_temporal_decay:
+                            active_innovations.append(f"时序衰减(γ={self.temporal_decay_gamma})")
+                        if self.use_asymmetric_clipping:
+                            active_innovations.append(f"非对称裁剪({self.clip_ratio_pos}/{self.clip_ratio_neg})")
+
+                        if active_innovations:
+                            print(f"🎯 [创新点激活] {', '.join(active_innovations)}")
+
+                            # 打印关键指标
+                            key_metrics = []
+                            if 'ema/variance_reduction_ratio' in innovation_metrics:
+                                key_metrics.append(f"方差降低={innovation_metrics['ema/variance_reduction_ratio']:.4f}")
+                            if 'gradient_adaptive/weight_variance' in innovation_metrics:
+                                key_metrics.append(f"梯度权重方差={innovation_metrics['gradient_adaptive/weight_variance']:.4f}")
+                            if 'amic/sequence_weights_variance' in innovation_metrics:
+                                key_metrics.append(f"AMIC方差={innovation_metrics['amic/sequence_weights_variance']:.4f}")
+                            if 'ptrw/trust_weights_mean' in innovation_metrics:
+                                key_metrics.append(f"PTRW信任度={innovation_metrics['ptrw/trust_weights_mean']:.4f}")
+                            if 'temporal_decay/weight_sum' in innovation_metrics:
+                                key_metrics.append(f"时序权重和={innovation_metrics['temporal_decay/weight_sum']:.4f}")
+                            if 'asymmetric/pos_advantage_ratio' in innovation_metrics:
+                                key_metrics.append(f"正优势比例={innovation_metrics['asymmetric/pos_advantage_ratio']:.4f}")
+
+                            if key_metrics:
+                                print(f"🎯 [关键指标] {', '.join(key_metrics)}")
 
                     if entropy_coeff != 0:
                         entropy_loss = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)

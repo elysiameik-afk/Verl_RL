@@ -25,8 +25,14 @@ from enum import Enum
 
 import numpy as np
 import torch
+import math
 
 import verl.utils.torch_functional as verl_F
+
+
+def is_main_process():
+    """检查是否为主进程"""
+    return not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
 
 ADV_ESTIMATOR_REGISTRY = {}
 
@@ -543,7 +549,7 @@ def apply_token_level_ema_smoothing(
         tuple: (smoothed_weights, ema_metrics)
     """
     import numpy as np
-    
+
     batch_size, seq_len = raw_weights.shape
     smoothed_weights = torch.zeros_like(raw_weights)
     
@@ -597,7 +603,7 @@ def apply_token_level_ema_smoothing(
             sequence_smoothing_effects.append(smoothing_effect)
     
     # 调试输出：显示token级平滑效果
-    if torch.distributed.get_rank() == 0 and batch_size > 0:
+    if is_main_process() and batch_size > 0:
         i = 0
         valid_mask = response_mask[i] > 0
         if valid_mask.sum() > 1:
@@ -651,6 +657,260 @@ def apply_token_level_ema_smoothing(
     return smoothed_weights, ema_metrics
 
 
+def apply_gradient_adaptive_weighting(
+    log_probs: torch.Tensor,
+    response_mask: torch.Tensor,
+    temperature: float = 1.0,
+) -> tuple[torch.Tensor, dict]:
+    """
+    创新点 2.2: 梯度自适应重要性加权
+
+    计算基于梯度范数的贡献权重 c_{i,t}
+
+    Args:
+        log_probs: [batch_size, seq_len] - 对数概率
+        response_mask: [batch_size, seq_len] - 有效token的mask
+        temperature: float - softmax温度参数
+
+    Returns:
+        tuple: (contribution_weights, metrics)
+    """
+    batch_size, seq_len = log_probs.shape
+    contribution_weights = torch.ones_like(log_probs)
+
+    sequence_gradient_norms = []
+
+    for i in range(batch_size):
+        sequence_log_probs = log_probs[i]  # [seq_len]
+        sequence_mask = response_mask[i]   # [seq_len]
+
+        valid_positions = torch.where(sequence_mask > 0)[0]
+        if len(valid_positions) <= 1:
+            continue
+
+        # 计算每个token的梯度范数 (简化版本，使用对数概率的绝对值作为代理)
+        gradient_norms = []
+        for pos in valid_positions:
+            token_log_prob = sequence_log_probs[pos]
+            # 使用对数概率的绝对值作为梯度范数的代理
+            grad_norm = abs(token_log_prob.item())
+            gradient_norms.append(grad_norm)
+
+        if len(gradient_norms) > 0:
+            # 应用softmax得到归一化的贡献权重
+            gradient_norms_tensor = torch.tensor(gradient_norms, device=log_probs.device)
+            softmax_weights = torch.softmax(gradient_norms_tensor / temperature, dim=0)
+
+            # 乘以序列长度保持尺度
+            scaled_weights = softmax_weights * len(valid_positions)
+
+            # 分配权重
+            for j, pos in enumerate(valid_positions):
+                contribution_weights[i, pos] = scaled_weights[j]
+
+            sequence_gradient_norms.extend(gradient_norms)
+
+    # 计算指标
+    metrics = {
+        'gradient_adaptive/avg_gradient_norm': np.mean(sequence_gradient_norms) if sequence_gradient_norms else 0.0,
+        'gradient_adaptive/max_gradient_norm': np.max(sequence_gradient_norms) if sequence_gradient_norms else 0.0,
+        'gradient_adaptive/min_gradient_norm': np.min(sequence_gradient_norms) if sequence_gradient_norms else 0.0,
+        'gradient_adaptive/weight_variance': contribution_weights[response_mask > 0].var().item(),
+        'gradient_adaptive/weight_mean': contribution_weights[response_mask > 0].mean().item(),
+        'gradient_adaptive/temperature': temperature,
+        'gradient_adaptive/use_gradient_adaptive': True,
+    }
+
+    return contribution_weights, metrics
+
+
+def apply_amic_aggregation(
+    raw_weights: torch.Tensor,
+    response_mask: torch.Tensor,
+) -> tuple[torch.Tensor, dict]:
+    """
+    创新点 2.3: 算术平均重要性校正 (AMIC)
+
+    计算序列级的算术平均权重 s'_i = (1/|y_i|) * Σ w_{i,t}
+
+    Args:
+        raw_weights: [batch_size, seq_len] - 原始重要性权重
+        response_mask: [batch_size, seq_len] - 有效token的mask
+
+    Returns:
+        tuple: (sequence_weights, metrics)
+    """
+    batch_size = raw_weights.shape[0]
+    sequence_weights = torch.zeros(batch_size, device=raw_weights.device)
+
+    sequence_lengths = []
+    sequence_variances = []
+
+    for i in range(batch_size):
+        sequence_mask = response_mask[i]
+        valid_positions = torch.where(sequence_mask > 0)[0]
+
+        if len(valid_positions) > 0:
+            valid_weights = raw_weights[i][valid_positions]
+            # 算术平均
+            sequence_weights[i] = valid_weights.mean()
+
+            sequence_lengths.append(len(valid_positions))
+            if len(valid_positions) > 1:
+                sequence_variances.append(valid_weights.var().item())
+        else:
+            sequence_weights[i] = 1.0  # 默认值
+
+    # 计算指标
+    metrics = {
+        'amic/sequence_weights_mean': sequence_weights.mean().item(),
+        'amic/sequence_weights_std': sequence_weights.std().item(),
+        'amic/sequence_weights_variance': sequence_weights.var().item(),
+        'amic/avg_sequence_length': np.mean(sequence_lengths) if sequence_lengths else 0.0,
+        'amic/avg_token_variance': np.mean(sequence_variances) if sequence_variances else 0.0,
+        'amic/use_amic': True,
+    }
+
+    return sequence_weights, metrics
+
+
+def apply_temporal_decay_weighting(
+    sequence_length: int,
+    gamma: float = 0.95,
+    normalize: bool = True,
+) -> tuple[torch.Tensor, dict]:
+    """
+    创新点 2.5: 基于时序衰减的优势塑造
+
+    计算时序衰减权重 d(t) = γ^(t-1)
+
+    Args:
+        sequence_length: int - 序列长度
+        gamma: float - 衰减因子 γ ∈ (0, 1]
+        normalize: bool - 是否归一化权重
+
+    Returns:
+        tuple: (decay_weights, metrics)
+    """
+    # 计算衰减权重
+    positions = torch.arange(1, sequence_length + 1, dtype=torch.float32)
+    decay_weights = gamma ** (positions - 1)
+
+    if normalize:
+        # 归一化使总和等于序列长度
+        decay_weights = decay_weights * sequence_length / decay_weights.sum()
+
+    # 计算指标
+    metrics = {
+        'temporal_decay/gamma': gamma,
+        'temporal_decay/normalize': normalize,
+        'temporal_decay/weight_sum': decay_weights.sum().item(),
+        'temporal_decay/weight_mean': decay_weights.mean().item(),
+        'temporal_decay/weight_std': decay_weights.std().item(),
+        'temporal_decay/first_weight': decay_weights[0].item(),
+        'temporal_decay/last_weight': decay_weights[-1].item(),
+        'temporal_decay/use_temporal_decay': True,
+    }
+
+    return decay_weights, metrics
+
+
+def apply_ptrw_objective(
+    importance_weights: torch.Tensor,
+    advantages: torch.Tensor,
+    sigma: float = 0.2,
+) -> tuple[torch.Tensor, dict]:
+    """
+    创新点 2.4: 概率性信任区域加权 (PTRW)
+
+    计算高斯信任权重 φ(s_i) = exp(-(s_i - 1)^2 / (2σ^2))
+
+    Args:
+        importance_weights: [batch_size] - 重要性权重
+        advantages: [batch_size] - 优势值
+        sigma: float - 高斯信任区域宽度
+
+    Returns:
+        tuple: (ptrw_loss, metrics)
+    """
+    # 计算高斯信任权重
+    trust_weights = torch.exp(-((importance_weights - 1.0) ** 2) / (2 * sigma ** 2))
+
+    # 计算PTRW损失
+    ptrw_loss = -trust_weights * importance_weights * advantages
+
+    # 计算指标
+    metrics = {
+        'ptrw/sigma': sigma,
+        'ptrw/trust_weights_mean': trust_weights.mean().item(),
+        'ptrw/trust_weights_std': trust_weights.std().item(),
+        'ptrw/trust_weights_min': trust_weights.min().item(),
+        'ptrw/trust_weights_max': trust_weights.max().item(),
+        'ptrw/loss_mean': ptrw_loss.mean().item(),
+        'ptrw/use_ptrw': True,
+    }
+
+    return ptrw_loss, metrics
+
+
+def apply_asymmetric_clipping(
+    importance_weights: torch.Tensor,
+    advantages: torch.Tensor,
+    clip_ratio_pos: float = 0.3,
+    clip_ratio_neg: float = 0.1,
+) -> tuple[torch.Tensor, dict]:
+    """
+    创新点 2.6: 正负优势的非对称策略优化
+
+    根据优势符号使用不同的裁剪范围
+
+    Args:
+        importance_weights: [batch_size] - 重要性权重
+        advantages: [batch_size] - 优势值
+        clip_ratio_pos: float - 正优势的裁剪范围
+        clip_ratio_neg: float - 负优势的裁剪范围
+
+    Returns:
+        tuple: (clipped_weights, metrics)
+    """
+    clipped_weights = torch.zeros_like(importance_weights)
+
+    # 正优势样本
+    pos_mask = advantages > 0
+    if pos_mask.any():
+        clipped_weights[pos_mask] = torch.clamp(
+            importance_weights[pos_mask],
+            1.0 - clip_ratio_pos,
+            1.0 + clip_ratio_pos
+        )
+
+    # 负优势样本
+    neg_mask = advantages <= 0
+    if neg_mask.any():
+        clipped_weights[neg_mask] = torch.clamp(
+            importance_weights[neg_mask],
+            1.0 - clip_ratio_neg,
+            1.0 + clip_ratio_neg
+        )
+
+    # 计算指标
+    pos_count = pos_mask.sum().item()
+    neg_count = neg_mask.sum().item()
+    total_count = len(advantages)
+
+    metrics = {
+        'asymmetric/clip_ratio_pos': clip_ratio_pos,
+        'asymmetric/clip_ratio_neg': clip_ratio_neg,
+        'asymmetric/pos_advantage_ratio': pos_count / total_count if total_count > 0 else 0.0,
+        'asymmetric/neg_advantage_ratio': neg_count / total_count if total_count > 0 else 0.0,
+        'asymmetric/pos_clipped_ratio': (torch.abs(importance_weights[pos_mask] - clipped_weights[pos_mask]) > 1e-6).float().mean().item() if pos_count > 0 else 0.0,
+        'asymmetric/neg_clipped_ratio': (torch.abs(importance_weights[neg_mask] - clipped_weights[neg_mask]) > 1e-6).float().mean().item() if neg_count > 0 else 0.0,
+        'asymmetric/use_asymmetric': True,
+    }
+
+    return clipped_weights, metrics
+
+
 def compute_policy_loss(
     old_log_prob,
     log_prob,
@@ -666,7 +926,7 @@ def compute_policy_loss(
     Compute the clipped policy objective and related metrics for PPO.
     This is the original version without EMA smoothing.
     """
-    return compute_policy_loss_with_ema(
+    return compute_policy_loss_with_innovations(
         old_log_prob=old_log_prob,
         log_prob=log_prob,
         advantages=advantages,
@@ -676,14 +936,11 @@ def compute_policy_loss(
         cliprange_high=cliprange_high,
         clip_ratio_c=clip_ratio_c,
         loss_agg_mode=loss_agg_mode,
-        ema_weights_state=None,
-        sequence_ids=None,
-        beta=None,
-        use_ema=False,
-    )[:-1]  # Remove ema_metrics from return
+        use_ema_smoothing=False,
+    )[:-1]  # Remove innovation_metrics from return
 
 
-def compute_policy_loss_with_ema(
+def compute_policy_loss_with_innovations(
     old_log_prob,
     log_prob,
     advantages,
@@ -693,11 +950,32 @@ def compute_policy_loss_with_ema(
     cliprange_high=None,
     clip_ratio_c=3.0,
     loss_agg_mode: str = "token-mean",
-    ema_weights_state=None,
-    sequence_ids=None,
-    beta=0.9,
-    use_ema=True,
+    # 创新点配置
+    use_ema_smoothing=False,
+    ema_beta=0.9,
+    use_gradient_adaptive_weighting=False,
+    gradient_weighting_temperature=1.0,
+    use_amic=False,
+    use_ptrw=False,
+    ptrw_sigma=0.2,
+    use_temporal_decay=False,
+    temporal_decay_gamma=0.95,
+    temporal_decay_normalize=True,
+    use_asymmetric_clipping=False,
+    clip_ratio_pos=0.3,
+    clip_ratio_neg=0.1,
 ):
+    """
+    综合所有创新点的策略损失计算函数
+
+    支持的创新点：
+    - 2.1: 时序平滑 (EMA) 的重要性权重
+    - 2.2: 梯度自适应重要性加权
+    - 2.3: 算术平均重要性校正 (AMIC)
+    - 2.4: 概率性信任区域加权 (PTRW)
+    - 2.5: 基于时序衰减的优势塑造
+    - 2.6: 正负优势的非对称策略优化
+    """
     """
     Compute the clipped policy objective and related metrics for PPO with optional EMA smoothing.
 
@@ -744,42 +1022,146 @@ def compute_policy_loss_with_ema(
     raw_ratio = torch.exp(negative_approx_kl)  # Raw importance weights w_{i,t}
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
 
-    # Apply EMA smoothing if enabled
-    ema_metrics = {}
-    if use_ema:
+    batch_size, seq_len = old_log_prob.shape
+
+    # 收集所有指标
+    all_metrics = {}
+
+    # 创新点 2.1: EMA 时序平滑
+    if use_ema_smoothing:
         ratio, ema_metrics = apply_token_level_ema_smoothing(
             raw_weights=raw_ratio,
             response_mask=response_mask,
-            beta=beta,
+            beta=ema_beta,
         )
+        all_metrics.update(ema_metrics)
+        if is_main_process():
+            print(f"🎯 [创新点2.1-EMA] 应用时序平滑, beta={ema_beta}")
     else:
         ratio = raw_ratio
-        # Add basic metrics even without EMA
-        ema_metrics = {
-            'ema/raw_weights_variance': (raw_ratio * response_mask).var().item(),
-            'ema/raw_weights_mean': (raw_ratio * response_mask).mean().item(),
-            'ema/raw_weights_std': (raw_ratio * response_mask).std().item(),
-            'ema/use_ema': False,
-        }
 
-    # Compute policy gradient loss using (possibly smoothed) importance weights
-    pg_losses1 = -advantages * ratio
-    if cliprange_low is None:
-        cliprange_low = cliprange
-    if cliprange_high is None:
-        cliprange_high = cliprange
-    pg_losses2 = -advantages * torch.clamp(ratio, 1 - cliprange_low, 1 + cliprange_high)
-    clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
-    pg_clipfrac = verl_F.masked_mean(torch.gt(pg_losses2, pg_losses1).float(), response_mask)
+    # 创新点 2.2: 梯度自适应重要性加权
+    contribution_weights = torch.ones_like(ratio)
+    if use_gradient_adaptive_weighting:
+        contribution_weights, grad_metrics = apply_gradient_adaptive_weighting(
+            log_probs=log_prob,
+            response_mask=response_mask,
+            temperature=gradient_weighting_temperature,
+        )
+        all_metrics.update(grad_metrics)
+        if is_main_process():
+            print(f"🎯 [创新点2.2-梯度自适应] 应用梯度加权, temperature={gradient_weighting_temperature}")
 
-    pg_losses3 = -advantages * clip_ratio_c
-    clip_pg_losses2 = torch.min(pg_losses3, clip_pg_losses1)
-    pg_clipfrac_lower = verl_F.masked_mean(torch.gt(clip_pg_losses1, pg_losses3) * (advantages < 0).float(), response_mask)
+    # 创新点 2.3: AMIC 算术平均重要性校正
+    if use_amic:
+        # 计算序列级权重
+        sequence_weights, amic_metrics = apply_amic_aggregation(
+            raw_weights=ratio,
+            response_mask=response_mask,
+        )
+        all_metrics.update(amic_metrics)
+        if is_main_process():
+            print(f"🎯 [创新点2.3-AMIC] 应用算术平均重要性校正")
 
-    pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
-    pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+        # 将序列级权重扩展到token级
+        ratio = sequence_weights.unsqueeze(1).expand(-1, seq_len)
 
-    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, ema_metrics
+    # 创新点 2.5: 时序衰减优势塑造
+    temporal_weights = torch.ones_like(ratio)
+    if use_temporal_decay:
+        for i in range(batch_size):
+            valid_positions = torch.where(response_mask[i] > 0)[0]
+            if len(valid_positions) > 0:
+                decay_weights, decay_metrics = apply_temporal_decay_weighting(
+                    sequence_length=len(valid_positions),
+                    gamma=temporal_decay_gamma,
+                    normalize=temporal_decay_normalize,
+                )
+                temporal_weights[i, valid_positions] = decay_weights.to(ratio.device)
+
+        all_metrics.update(decay_metrics)
+        if is_main_process():
+            print(f"🎯 [创新点2.5-时序衰减] 应用时序衰减, gamma={temporal_decay_gamma}")
+
+    # 组合所有权重 (时序衰减作为权重因子，不修改优势)
+    final_ratio = ratio * contribution_weights * temporal_weights
+
+    # 优势保持原样，不被时序衰减直接修改
+    final_advantages = advantages
+
+    # 创新点 2.6: 非对称裁剪 或 创新点 2.4: PTRW
+    if use_ptrw:
+        # 使用PTRW目标函数
+        sequence_advantages = verl_F.masked_mean(final_advantages, response_mask, dim=1)
+        sequence_ratio = verl_F.masked_mean(final_ratio, response_mask, dim=1)
+
+        ptrw_loss, ptrw_metrics = apply_ptrw_objective(
+            importance_weights=sequence_ratio,
+            advantages=sequence_advantages,
+            sigma=ptrw_sigma,
+        )
+        all_metrics.update(ptrw_metrics)
+
+        pg_loss = ptrw_loss.mean()
+        pg_clipfrac = torch.tensor(0.0, device=ratio.device)  # PTRW不使用裁剪
+        pg_clipfrac_lower = torch.tensor(0.0, device=ratio.device)
+
+        if is_main_process():
+            print(f"🎯 [创新点2.4-PTRW] 应用概率性信任区域, sigma={ptrw_sigma}")
+
+    elif use_asymmetric_clipping:
+        # 使用非对称裁剪
+        sequence_advantages = verl_F.masked_mean(final_advantages, response_mask, dim=1)
+        sequence_ratio = verl_F.masked_mean(final_ratio, response_mask, dim=1)
+
+        clipped_ratio, asym_metrics = apply_asymmetric_clipping(
+            importance_weights=sequence_ratio,
+            advantages=sequence_advantages,
+            clip_ratio_pos=clip_ratio_pos,
+            clip_ratio_neg=clip_ratio_neg,
+        )
+        all_metrics.update(asym_metrics)
+
+        # 扩展回token级
+        clipped_ratio_expanded = clipped_ratio.unsqueeze(1).expand(-1, seq_len)
+
+        pg_losses = -final_advantages * clipped_ratio_expanded
+        pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+
+        # 计算裁剪统计
+        pg_clipfrac = verl_F.masked_mean((torch.abs(sequence_ratio - clipped_ratio) > 1e-6).float().unsqueeze(1).expand(-1, seq_len), response_mask)
+        pg_clipfrac_lower = torch.tensor(0.0, device=ratio.device)
+
+        if is_main_process():
+            print(f"🎯 [创新点2.6-非对称裁剪] 应用非对称裁剪, pos={clip_ratio_pos}, neg={clip_ratio_neg}")
+
+    else:
+        # 使用标准PPO裁剪
+        pg_losses1 = -final_advantages * final_ratio
+        if cliprange_low is None:
+            cliprange_low = cliprange
+        if cliprange_high is None:
+            cliprange_high = cliprange
+        pg_losses2 = -final_advantages * torch.clamp(final_ratio, 1 - cliprange_low, 1 + cliprange_high)
+        clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
+        pg_clipfrac = verl_F.masked_mean(torch.gt(pg_losses2, pg_losses1).float(), response_mask)
+
+        pg_losses3 = -final_advantages * clip_ratio_c
+        clip_pg_losses2 = torch.min(pg_losses3, clip_pg_losses1)
+        pg_clipfrac_lower = verl_F.masked_mean(torch.gt(clip_pg_losses1, pg_losses3) * (final_advantages < 0).float(), response_mask)
+
+        pg_losses = torch.where(final_advantages < 0, clip_pg_losses2, clip_pg_losses1)
+        pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+
+    # 添加基础指标
+    all_metrics.update({
+        'innovation/final_ratio_mean': (final_ratio * response_mask).mean().item(),
+        'innovation/final_ratio_std': (final_ratio * response_mask).std().item(),
+        'innovation/final_advantages_mean': (final_advantages * response_mask).mean().item(),
+        'innovation/final_advantages_std': (final_advantages * response_mask).std().item(),
+    })
+
+    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, all_metrics
 
 
 def compute_entropy_loss(logits, response_mask, loss_agg_mode: str = "token-mean"):

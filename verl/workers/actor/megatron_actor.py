@@ -38,7 +38,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 from verl import DataProto
-from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_policy_loss_with_ema, kl_penalty
+from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_policy_loss_with_innovations, kl_penalty
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.debug.profile import Profiler
 from verl.utils.megatron.pipeline_parallel import make_batch_generator
@@ -137,11 +137,24 @@ class MegatronPPOActor(BasePPOActor):
         print(config)
         config.finalize_model_grads_func = finalize_model_grads
         
-        # Initialize token-level EMA smoothing config (序列内token级时序平滑)
+        # Initialize all innovation configs
         self.use_ema_smoothing = self.config.get("use_ema_smoothing", False)
         self.ema_beta = self.config.get("ema_beta", 0.9)
-        if torch.distributed.get_rank() == 0:
-            print(f"🎯 [TOKEN-EMA-GRPO] Megatron Actor use_ema_smoothing={self.use_ema_smoothing}, ema_beta={self.ema_beta} (序列内token级时序平滑)")
+        self.use_gradient_adaptive_weighting = self.config.get("use_gradient_adaptive_weighting", False)
+        self.gradient_weighting_temperature = self.config.get("gradient_weighting_temperature", 1.0)
+        self.use_amic = self.config.get("use_amic", False)
+        self.use_ptrw = self.config.get("use_ptrw", False)
+        self.ptrw_sigma = self.config.get("ptrw_sigma", 0.2)
+        self.use_temporal_decay = self.config.get("use_temporal_decay", False)
+        self.temporal_decay_gamma = self.config.get("temporal_decay_gamma", 0.95)
+        self.temporal_decay_normalize = self.config.get("temporal_decay_normalize", True)
+        self.use_asymmetric_clipping = self.config.get("use_asymmetric_clipping", False)
+        self.clip_ratio_pos = self.config.get("clip_ratio_pos", 0.3)
+        self.clip_ratio_neg = self.config.get("clip_ratio_neg", 0.1)
+
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            print(f"🎯 [Megatron创新点配置] EMA={self.use_ema_smoothing}, 梯度自适应={self.use_gradient_adaptive_weighting}, AMIC={self.use_amic}")
+            print(f"🎯 [Megatron创新点配置] PTRW={self.use_ptrw}, 时序衰减={self.use_temporal_decay}, 非对称裁剪={self.use_asymmetric_clipping}")
 
     def _validate_config(self, config) -> None:
         """Validate config options not implemented for Megatron backend"""
@@ -366,38 +379,54 @@ class MegatronPPOActor(BasePPOActor):
                 clip_ratio_high = self.config.clip_ratio_high if self.config.clip_ratio_high is not None else clip_ratio
                 clip_ratio_c = meta_info["clip_ratio_c"]
                 
-                # Use token-level EMA-enabled policy loss computation
-                if self.use_ema_smoothing:
-                    if torch.distributed.get_rank() == 0:
-                        print(f"🎯 [TOKEN-EMA-GRPO] Megatron应用序列内token级时序平滑, beta={self.ema_beta}")
-                    
-                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, ema_metrics = compute_policy_loss_with_ema(
-                        old_log_prob=old_log_prob,
-                        log_prob=log_prob,
-                        advantages=advantages,
-                        response_mask=response_mask,
-                        cliprange=clip_ratio,
-                        cliprange_low=clip_ratio_low,
-                        cliprange_high=clip_ratio_high,
-                        clip_ratio_c=clip_ratio_c,
-                        loss_agg_mode=loss_agg_mode,
-                        beta=self.ema_beta,
-                        use_ema=True,
-                    )
-                    # Add EMA metrics to the metrics dictionary using append_to_dict
-                    append_to_dict(metrics, ema_metrics)
-                else:
-                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
-                        old_log_prob=old_log_prob,
-                        log_prob=log_prob,
-                        advantages=advantages,
-                        response_mask=response_mask,
-                        cliprange=clip_ratio,
-                        cliprange_low=clip_ratio_low,
-                        cliprange_high=clip_ratio_high,
-                        clip_ratio_c=clip_ratio_c,
-                        loss_agg_mode=loss_agg_mode,
-                    )
+                # Use comprehensive innovation-enabled policy loss computation
+                pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, innovation_metrics = compute_policy_loss_with_innovations(
+                    old_log_prob=old_log_prob,
+                    log_prob=log_prob,
+                    advantages=advantages,
+                    response_mask=response_mask,
+                    cliprange=clip_ratio,
+                    cliprange_low=clip_ratio_low,
+                    cliprange_high=clip_ratio_high,
+                    clip_ratio_c=clip_ratio_c,
+                    loss_agg_mode=loss_agg_mode,
+                    # 创新点配置
+                    use_ema_smoothing=self.use_ema_smoothing,
+                    ema_beta=self.ema_beta,
+                    use_gradient_adaptive_weighting=self.use_gradient_adaptive_weighting,
+                    gradient_weighting_temperature=self.gradient_weighting_temperature,
+                    use_amic=self.use_amic,
+                    use_ptrw=self.use_ptrw,
+                    ptrw_sigma=self.ptrw_sigma,
+                    use_temporal_decay=self.use_temporal_decay,
+                    temporal_decay_gamma=self.temporal_decay_gamma,
+                    temporal_decay_normalize=self.temporal_decay_normalize,
+                    use_asymmetric_clipping=self.use_asymmetric_clipping,
+                    clip_ratio_pos=self.clip_ratio_pos,
+                    clip_ratio_neg=self.clip_ratio_neg,
+                )
+
+                # Add innovation metrics to the metrics dictionary
+                append_to_dict(metrics, innovation_metrics)
+
+                # 打印关键指标 (Megatron版本)
+                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                    active_innovations = []
+                    if self.use_ema_smoothing:
+                        active_innovations.append(f"EMA(β={self.ema_beta})")
+                    if self.use_gradient_adaptive_weighting:
+                        active_innovations.append(f"梯度自适应(T={self.gradient_weighting_temperature})")
+                    if self.use_amic:
+                        active_innovations.append("AMIC")
+                    if self.use_ptrw:
+                        active_innovations.append(f"PTRW(σ={self.ptrw_sigma})")
+                    if self.use_temporal_decay:
+                        active_innovations.append(f"时序衰减(γ={self.temporal_decay_gamma})")
+                    if self.use_asymmetric_clipping:
+                        active_innovations.append(f"非对称裁剪({self.clip_ratio_pos}/{self.clip_ratio_neg})")
+
+                    if active_innovations:
+                        print(f"🎯 [Megatron创新点激活] {', '.join(active_innovations)}")
                 policy_loss = pg_loss
             if calculate_entropy:
                 entropy = output["entropy"][:, -response_length - 1 : -1].contiguous()

@@ -201,11 +201,31 @@ actor_rollout_ref:
     # Sequence parallelism size for Ulysses-style model parallelism
     ulysses_sequence_parallel_size: 1
 
-    # Whether to use EMA smoothing for importance weights (for EMA-GRPO)
+    # ========== 创新点配置 ==========
+    # 创新点 2.1: 时序平滑 (EMA) 的重要性权重
     use_ema_smoothing: False
+    ema_beta: 0.9  # EMA平滑因子 β ∈ (0, 1]
 
-    # EMA smoothing factor β for importance weights (0 < β ≤ 1)
-    ema_beta: 0.9
+    # 创新点 2.2: 梯度自适应重要性加权
+    use_gradient_adaptive_weighting: False
+    gradient_weighting_temperature: 1.0  # softmax温度参数
+
+    # 创新点 2.3: 算术平均重要性校正 (AMIC)
+    use_amic: False  # 与GSPO互斥，开启时自动禁用GSPO
+
+    # 创新点 2.4: 概率性信任区域加权 (PTRW)
+    use_ptrw: False
+    ptrw_sigma: 0.2  # 高斯信任区域宽度参数
+
+    # 创新点 2.5: 基于时序衰减的优势塑造
+    use_temporal_decay: False
+    temporal_decay_gamma: 0.95  # 时序衰减因子 γ ∈ (0, 1]
+    temporal_decay_normalize: True  # 是否归一化衰减权重
+
+    # 创新点 2.6: 正负优势的非对称策略优化
+    use_asymmetric_clipping: False
+    clip_ratio_pos: 0.3  # 正优势的裁剪范围 ε_pos
+    clip_ratio_neg: 0.1  # 负优势的裁剪范围 ε_neg
 
     # checkpoint configs
     checkpoint:

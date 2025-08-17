@@ -3,8 +3,13 @@ set -x
 
 export VLLM_ATTENTION_BACKEND=XFORMERS
 
-echo "🎯 开始Token级时序平滑EMA训练..."
-echo "创新点: 序列内token级重要性权重时序平滑 w'[i,t] = β×w[i,t] + (1-β)×w'[i,t-1]"
+echo "🎯 开始全创新点训练实验..."
+echo "创新点 2.1: 时序平滑 (EMA) 的重要性权重"
+echo "创新点 2.2: 梯度自适应重要性加权"
+echo "创新点 2.3: 算术平均重要性校正 (AMIC)"
+echo "创新点 2.4: 概率性信任区域加权 (PTRW)"
+echo "创新点 2.5: 基于时序衰减的优势塑造"
+echo "创新点 2.6: 正负优势的非对称策略优化"
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
@@ -36,16 +41,27 @@ python3 -m verl.trainer.main_ppo \
     algorithm.kl_ctrl.kl_coef=0.05 \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
-    trainer.project_name=Qwen2.5-0.5-TokenEMA \
-    trainer.experiment_name=GRPO_Token_EMA_14 \
+    trainer.project_name=Qwen2.5-0.5-AllInnovations \
+    trainer.experiment_name=GRPO_All_Innovations_Test \
     trainer.n_gpus_per_node=1 \
-    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_Token_EMA_14 \
+    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_All_Innovations_Test \
     trainer.nnodes=1 \
     trainer.save_freq=4 \
     trainer.test_freq=1 \
     trainer.total_epochs=8 \
     reward_model.reward_manager=logic_rl \
     actor_rollout_ref.actor.use_ema_smoothing=True \
-    actor_rollout_ref.actor.ema_beta=0.7
+    actor_rollout_ref.actor.ema_beta=0.9 \
+    actor_rollout_ref.actor.use_gradient_adaptive_weighting=True \
+    actor_rollout_ref.actor.gradient_weighting_temperature=1.0 \
+    actor_rollout_ref.actor.use_amic=False \
+    actor_rollout_ref.actor.use_ptrw=False \
+    actor_rollout_ref.actor.ptrw_sigma=0.2 \
+    actor_rollout_ref.actor.use_temporal_decay=True \
+    actor_rollout_ref.actor.temporal_decay_gamma=0.95 \
+    actor_rollout_ref.actor.temporal_decay_normalize=True \
+    actor_rollout_ref.actor.use_asymmetric_clipping=False \
+    actor_rollout_ref.actor.clip_ratio_pos=0.3 \
+    actor_rollout_ref.actor.clip_ratio_neg=0.1
 
-echo "🎉 Token级时序平滑EMA训练完成！"
+echo "🎉 全创新点训练完成！"
