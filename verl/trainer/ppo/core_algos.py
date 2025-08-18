@@ -1079,19 +1079,27 @@ def compute_policy_loss_with_innovations(
                     gamma=temporal_decay_gamma,
                     normalize=temporal_decay_normalize,
                 )
+                # 只对有效位置设置衰减权重，无效位置保持1（但会被mask掉）
                 temporal_weights[i, valid_positions] = decay_weights.to(ratio.device)
                 all_decay_weights.extend(decay_weights.tolist())
+            # 对于没有有效token的序列，保持全1权重
 
         # 计算整体的时序衰减指标
         if all_decay_weights:
+            # 计算单个序列的平均长度（用于归一化总和）
+            num_sequences = len([i for i in range(batch_size) if torch.sum(response_mask[i]) > 0])
+            avg_sequence_length = len(all_decay_weights) / num_sequences if num_sequences > 0 else 1
+
             decay_metrics = {
                 'temporal_decay/gamma': temporal_decay_gamma,
                 'temporal_decay/normalize': temporal_decay_normalize,
-                'temporal_decay/weight_sum': sum(all_decay_weights),
+                'temporal_decay/weight_sum_per_sequence': sum(all_decay_weights) / num_sequences if num_sequences > 0 else 0,
                 'temporal_decay/weight_mean': np.mean(all_decay_weights),
                 'temporal_decay/weight_std': np.std(all_decay_weights),
                 'temporal_decay/weight_min': min(all_decay_weights),
                 'temporal_decay/weight_max': max(all_decay_weights),
+                'temporal_decay/avg_sequence_length': avg_sequence_length,
+                'temporal_decay/num_sequences': num_sequences,
                 'temporal_decay/use_temporal_decay': True,
             }
         else:
@@ -1104,7 +1112,7 @@ def compute_policy_loss_with_innovations(
 
         all_metrics.update(decay_metrics)
         if is_main_process():
-            print(f"🎯 [创新点2.5-时序衰减] 应用时序衰减, gamma={temporal_decay_gamma}, 平均权重={decay_metrics['temporal_decay/weight_mean']:.4f}")
+            print(f"🎯 [创新点2.5-时序衰减] 应用时序衰减, gamma={temporal_decay_gamma}, 平均权重={decay_metrics['temporal_decay/weight_mean']:.4f}, 序列数={decay_metrics.get('temporal_decay/num_sequences', 0)}")
 
     # 组合所有权重 (时序衰减作为权重因子，不修改优势)
     final_ratio = ratio * contribution_weights * temporal_weights
