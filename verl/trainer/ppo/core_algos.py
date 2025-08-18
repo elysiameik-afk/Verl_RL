@@ -797,8 +797,9 @@ def apply_temporal_decay_weighting(
     decay_weights = gamma ** (positions - 1)
 
     if normalize:
-        # 归一化使总和等于序列长度
-        decay_weights = decay_weights * sequence_length / decay_weights.sum()
+        # 可选归一化：使总和等于1（保持相对权重比例）
+        decay_weights = decay_weights / decay_weights.sum()
+    # 注意：不归一化时，早期token获得更大的绝对权重，更符合创新点原理
 
     # 计算指标
     metrics = {
