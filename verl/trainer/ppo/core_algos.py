@@ -1082,6 +1082,12 @@ def compute_policy_loss_with_innovations(
                 # 只对有效位置设置衰减权重，无效位置保持1（但会被mask掉）
                 temporal_weights[i, valid_positions] = decay_weights.to(ratio.device)
                 all_decay_weights.extend(decay_weights.tolist())
+
+                # 调试：打印第一个序列的详细信息
+                if i == 0 and is_main_process():
+                    print(f"🔍 [调试] 序列{i}: 长度={len(valid_positions)}, gamma={temporal_decay_gamma}, normalize={temporal_decay_normalize}")
+                    print(f"🔍 [调试] 衰减权重: {decay_weights.tolist()[:5]}...")  # 只打印前5个
+                    print(f"🔍 [调试] 权重均值: {decay_weights.mean().item():.6f}, 总和: {decay_weights.sum().item():.6f}")
             # 对于没有有效token的序列，保持全1权重
 
         # 计算整体的时序衰减指标

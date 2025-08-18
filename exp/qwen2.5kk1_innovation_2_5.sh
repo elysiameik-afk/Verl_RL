@@ -50,7 +50,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.use_ptrw=False \
     actor_rollout_ref.actor.use_temporal_decay=True \
     actor_rollout_ref.actor.temporal_decay_gamma=0.95 \
-    actor_rollout_ref.actor.temporal_decay_normalize=True \
+    actor_rollout_ref.actor.temporal_decay_normalize=False \
     actor_rollout_ref.actor.use_asymmetric_clipping=False
 
 echo "🎉 创新点2.5测试完成！"
