@@ -778,38 +778,80 @@ def apply_temporal_decay_weighting(
     sequence_length: int,
     gamma: float = 0.95,
     normalize: bool = True,
+    use_lspd: bool = True,
+    lspd_alpha: float = 2.0,
+    lspd_tau: float = 10.0,
 ) -> tuple[torch.Tensor, dict]:
     """
     创新点 2.5: 基于时序衰减的优势塑造
 
-    计算时序衰减权重 d(t) = γ^(t-1)
+    支持两种衰减方法：
+    1. 标准指数衰减: d(t) = γ^(t-1)
+    2. LSPD对数尺度位置衰减: d(t) = exp(-α * (log(1 + t/τ) / log(1 + (L-1)/τ)))
 
     Args:
         sequence_length: int - 序列长度
-        gamma: float - 衰减因子 γ ∈ (0, 1]
+        gamma: float - 标准衰减因子 γ ∈ (0, 1] (仅用于标准衰减)
         normalize: bool - 是否归一化权重
+        use_lspd: bool - 是否使用LSPD算法
+        lspd_alpha: float - LSPD衰减强度 α > 0
+        lspd_tau: float - LSPD时间尺度 τ > 0
 
     Returns:
         tuple: (decay_weights, metrics)
     """
-    # 计算衰减权重
-    positions = torch.arange(1, sequence_length + 1, dtype=torch.float32)
-    decay_weights = gamma ** (positions - 1)
+    if use_lspd:
+        # LSPD (对数尺度位置衰减) 算法
+        if sequence_length == 1:
+            decay_weights = torch.tensor([1.0], dtype=torch.float32)
+        else:
+            # 1. 创建位置索引向量 (从0开始)
+            positions = torch.arange(0, sequence_length, dtype=torch.float32)
+
+            # 2. 对数尺度变换
+            log_transformed_positions = torch.log(1 + positions / lspd_tau)
+
+            # 3. 计算归一化因子
+            normalization_factor = math.log(1 + (sequence_length - 1) / lspd_tau)
+
+            # 4. 归一化位置尺度到[0,1]
+            normalized_scaled_positions = log_transformed_positions / normalization_factor
+
+            # 5. 应用指数衰减
+            decay_weights = torch.exp(-lspd_alpha * normalized_scaled_positions)
+
+        # LSPD指标
+        base_metrics = {
+            'temporal_decay/algorithm': 'LSPD',
+            'temporal_decay/lspd_alpha': lspd_alpha,
+            'temporal_decay/lspd_tau': lspd_tau,
+        }
+    else:
+        # 标准指数衰减
+        positions = torch.arange(1, sequence_length + 1, dtype=torch.float32)
+        decay_weights = gamma ** (positions - 1)
+
+        # 标准衰减指标
+        base_metrics = {
+            'temporal_decay/algorithm': 'Standard',
+            'temporal_decay/gamma': gamma,
+        }
 
     if normalize:
         # 可选归一化：使总和等于1（保持相对权重比例）
         decay_weights = decay_weights / decay_weights.sum()
-    # 注意：不归一化时，早期token获得更大的绝对权重，更符合创新点原理
 
-    # 计算指标
+    # 计算通用指标
     metrics = {
-        'temporal_decay/gamma': gamma,
+        **base_metrics,
         'temporal_decay/normalize': normalize,
+        'temporal_decay/sequence_length': sequence_length,
         'temporal_decay/weight_sum': decay_weights.sum().item(),
         'temporal_decay/weight_mean': decay_weights.mean().item(),
         'temporal_decay/weight_std': decay_weights.std().item(),
         'temporal_decay/first_weight': decay_weights[0].item(),
         'temporal_decay/last_weight': decay_weights[-1].item(),
+        'temporal_decay/weight_ratio_first_to_last': (decay_weights[0] / decay_weights[-1]).item() if decay_weights[-1] > 1e-8 else float('inf'),
         'temporal_decay/use_temporal_decay': True,
     }
 
@@ -962,6 +1004,9 @@ def compute_policy_loss_with_innovations(
     use_temporal_decay=False,
     temporal_decay_gamma=0.95,
     temporal_decay_normalize=True,
+    temporal_decay_use_lspd=True,
+    temporal_decay_lspd_alpha=2.0,
+    temporal_decay_lspd_tau=10.0,
     use_asymmetric_clipping=False,
     clip_ratio_pos=0.3,
     clip_ratio_neg=0.1,
@@ -1078,16 +1123,13 @@ def compute_policy_loss_with_innovations(
                     sequence_length=len(valid_positions),
                     gamma=temporal_decay_gamma,
                     normalize=temporal_decay_normalize,
+                    use_lspd=temporal_decay_use_lspd,
+                    lspd_alpha=temporal_decay_lspd_alpha,
+                    lspd_tau=temporal_decay_lspd_tau,
                 )
                 # 只对有效位置设置衰减权重，无效位置保持1（但会被mask掉）
                 temporal_weights[i, valid_positions] = decay_weights.to(ratio.device)
                 all_decay_weights.extend(decay_weights.tolist())
-
-                # 调试：打印第一个序列的详细信息
-                if i == 0 and is_main_process():
-                    print(f"🔍 [调试] 序列{i}: 长度={len(valid_positions)}, gamma={temporal_decay_gamma}, normalize={temporal_decay_normalize}")
-                    print(f"🔍 [调试] 衰减权重: {decay_weights.tolist()[:5]}...")  # 只打印前5个
-                    print(f"🔍 [调试] 权重均值: {decay_weights.mean().item():.6f}, 总和: {decay_weights.sum().item():.6f}")
             # 对于没有有效token的序列，保持全1权重
 
         # 计算整体的时序衰减指标

@@ -148,6 +148,9 @@ class MegatronPPOActor(BasePPOActor):
         self.use_temporal_decay = self.config.get("use_temporal_decay", False)
         self.temporal_decay_gamma = self.config.get("temporal_decay_gamma", 0.95)
         self.temporal_decay_normalize = self.config.get("temporal_decay_normalize", True)
+        self.temporal_decay_use_lspd = self.config.get("temporal_decay_use_lspd", True)
+        self.temporal_decay_lspd_alpha = self.config.get("temporal_decay_lspd_alpha", 2.0)
+        self.temporal_decay_lspd_tau = self.config.get("temporal_decay_lspd_tau", 10.0)
         self.use_asymmetric_clipping = self.config.get("use_asymmetric_clipping", False)
         self.clip_ratio_pos = self.config.get("clip_ratio_pos", 0.3)
         self.clip_ratio_neg = self.config.get("clip_ratio_neg", 0.1)
@@ -401,6 +404,9 @@ class MegatronPPOActor(BasePPOActor):
                     use_temporal_decay=self.use_temporal_decay,
                     temporal_decay_gamma=self.temporal_decay_gamma,
                     temporal_decay_normalize=self.temporal_decay_normalize,
+                    temporal_decay_use_lspd=self.temporal_decay_use_lspd,
+                    temporal_decay_lspd_alpha=self.temporal_decay_lspd_alpha,
+                    temporal_decay_lspd_tau=self.temporal_decay_lspd_tau,
                     use_asymmetric_clipping=self.use_asymmetric_clipping,
                     clip_ratio_pos=self.clip_ratio_pos,
                     clip_ratio_neg=self.clip_ratio_neg,

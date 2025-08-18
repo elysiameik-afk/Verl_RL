@@ -219,8 +219,11 @@ actor_rollout_ref:
 
     # 创新点 2.5: 基于时序衰减的优势塑造
     use_temporal_decay: False
-    temporal_decay_gamma: 0.95  # 时序衰减因子 γ ∈ (0, 1]
+    temporal_decay_gamma: 0.95  # 标准衰减因子 γ ∈ (0, 1] (仅用于标准衰减)
     temporal_decay_normalize: True  # 是否归一化衰减权重
+    temporal_decay_use_lspd: True  # 是否使用LSPD对数尺度位置衰减
+    temporal_decay_lspd_alpha: 2.0  # LSPD衰减强度 α > 0
+    temporal_decay_lspd_tau: 10.0  # LSPD时间尺度 τ > 0
 
     # 创新点 2.6: 正负优势的非对称策略优化
     use_asymmetric_clipping: False
