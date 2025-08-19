@@ -88,6 +88,10 @@ class DataParallelPPOActor(BasePPOActor):
         self.temporal_decay_use_lspd = self.config.get("temporal_decay_use_lspd", True)
         self.temporal_decay_lspd_alpha = self.config.get("temporal_decay_lspd_alpha", 2.0)
         self.temporal_decay_lspd_tau = self.config.get("temporal_decay_lspd_tau", 10.0)
+        self.use_sca = self.config.get("use_sca", False)
+        self.sca_answer_credit_ratio = self.config.get("sca_answer_credit_ratio", 0.3)
+        self.sca_structure_credit_ratio = self.config.get("sca_structure_credit_ratio", 0.2)
+        self.sca_process_credit_ratio = self.config.get("sca_process_credit_ratio", 0.5)
         self.use_asymmetric_clipping = self.config.get("use_asymmetric_clipping", False)
         self.clip_ratio_pos = self.config.get("clip_ratio_pos", 0.3)
         self.clip_ratio_neg = self.config.get("clip_ratio_neg", 0.1)
@@ -444,6 +448,10 @@ class DataParallelPPOActor(BasePPOActor):
                         temporal_decay_use_lspd=self.temporal_decay_use_lspd,
                         temporal_decay_lspd_alpha=self.temporal_decay_lspd_alpha,
                         temporal_decay_lspd_tau=self.temporal_decay_lspd_tau,
+                        use_sca=self.use_sca,
+                        sca_answer_credit_ratio=self.sca_answer_credit_ratio,
+                        sca_structure_credit_ratio=self.sca_structure_credit_ratio,
+                        sca_process_credit_ratio=self.sca_process_credit_ratio,
                         use_asymmetric_clipping=self.use_asymmetric_clipping,
                         clip_ratio_pos=self.clip_ratio_pos,
                         clip_ratio_neg=self.clip_ratio_neg,

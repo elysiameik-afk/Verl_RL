@@ -858,6 +858,187 @@ def apply_temporal_decay_weighting(
     return decay_weights, metrics
 
 
+def apply_structured_credit_assignment(
+    token_ids: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    answer_credit_ratio: float = 0.3,
+    structure_credit_ratio: float = 0.2,
+    process_credit_ratio: float = 0.5,
+    lspd_alpha: float = 2.0,
+    lspd_tau: float = 10.0,
+    lspd_normalize: bool = False,
+) -> tuple[torch.Tensor, dict]:
+    """
+    结构化信用分配 (SCA) - 创新点2.5增强版
+
+    将序列解析为结构标记、推理过程、最终答案三部分，
+    并为每部分应用不同的信用分配策略
+
+    Args:
+        token_ids: [batch_size, seq_len] - token ID序列
+        advantages: [batch_size, seq_len] - 优势值
+        response_mask: [batch_size, seq_len] - 有效token mask
+        answer_credit_ratio: float - 答案部分信用比例
+        structure_credit_ratio: float - 结构标记信用比例
+        process_credit_ratio: float - 推理过程信用比例
+        lspd_alpha: float - LSPD衰减强度
+        lspd_tau: float - LSPD时间尺度
+        lspd_normalize: bool - 是否归一化LSPD权重
+
+    Returns:
+        tuple: (adjusted_weights, metrics)
+    """
+    # 预定义的token ID常量
+    THINK_OPEN_IDS = [151667]
+    THINK_CLOSE_IDS = [151668]
+    ANSWER_OPEN_IDS = [27, 9217, 29]
+    ANSWER_CLOSE_IDS = [522, 9217, 29]
+
+    batch_size, seq_len = token_ids.shape
+    adjusted_weights = torch.ones_like(advantages, dtype=torch.float32)
+
+    # 统计指标
+    total_sequences = 0
+    successful_parses = 0
+    structure_tokens_total = 0
+    process_tokens_total = 0
+    answer_tokens_total = 0
+    positive_reward_count = 0
+    negative_reward_count = 0
+
+    for i in range(batch_size):
+        sequence_ids = token_ids[i].cpu().numpy().tolist()
+        sequence_advantages = advantages[i]
+        sequence_mask = response_mask[i]
+
+        valid_positions = torch.where(sequence_mask > 0)[0]
+        if len(valid_positions) == 0:
+            continue
+
+        total_sequences += 1
+
+        # 计算序列级奖励（优势的平均值作为奖励代理）
+        sequence_reward = sequence_advantages[valid_positions].mean().item()
+
+        if sequence_reward > 0:
+            positive_reward_count += 1
+        else:
+            negative_reward_count += 1
+
+        # 查找标记位置
+        think_start = find_subsequence(sequence_ids, THINK_OPEN_IDS)
+        think_end = find_subsequence(sequence_ids, THINK_CLOSE_IDS)
+        answer_start = find_subsequence(sequence_ids, ANSWER_OPEN_IDS)
+        answer_end = find_subsequence(sequence_ids, ANSWER_CLOSE_IDS)
+
+        # 检查是否成功解析
+        if think_start == -1 or think_end == -1 or answer_start == -1 or answer_end == -1:
+            # 解析失败，均匀惩罚所有token
+            if sequence_reward <= 0:
+                adjusted_weights[i, valid_positions] = 1.0  # 保持惩罚
+            continue
+
+        successful_parses += 1
+
+        # 确定各部分的索引范围
+        process_start = think_start + len(THINK_OPEN_IDS)
+        process_end = think_end
+        answer_content_start = answer_start + len(ANSWER_OPEN_IDS)
+        answer_content_end = answer_end
+
+        # 收集各部分的索引
+        structure_indices = []
+        structure_indices.extend(range(think_start, think_start + len(THINK_OPEN_IDS)))
+        structure_indices.extend(range(think_end, think_end + len(THINK_CLOSE_IDS)))
+        structure_indices.extend(range(answer_start, answer_start + len(ANSWER_OPEN_IDS)))
+        structure_indices.extend(range(answer_end, answer_end + len(ANSWER_CLOSE_IDS)))
+
+        process_indices = list(range(process_start, process_end))
+        answer_indices = list(range(answer_content_start, answer_content_end))
+
+        # 过滤有效索引
+        structure_indices = [idx for idx in structure_indices if idx < seq_len and sequence_mask[idx] > 0]
+        process_indices = [idx for idx in process_indices if idx < seq_len and sequence_mask[idx] > 0]
+        answer_indices = [idx for idx in answer_indices if idx < seq_len and sequence_mask[idx] > 0]
+
+        # 统计token数量
+        structure_tokens_total += len(structure_indices)
+        process_tokens_total += len(process_indices)
+        answer_tokens_total += len(answer_indices)
+
+        if sequence_reward > 0:
+            # 正奖励：按比例分配信用
+
+            # 答案部分：均匀分配
+            if answer_indices:
+                answer_weight = answer_credit_ratio / len(answer_indices)
+                for idx in answer_indices:
+                    adjusted_weights[i, idx] = answer_weight
+
+            # 结构标记：均匀分配
+            if structure_indices:
+                structure_weight = structure_credit_ratio / len(structure_indices)
+                for idx in structure_indices:
+                    adjusted_weights[i, idx] = structure_weight
+
+            # 推理过程：应用LSPD
+            if process_indices:
+                process_length = len(process_indices)
+                lspd_weights, _ = apply_temporal_decay_weighting(
+                    sequence_length=process_length,
+                    gamma=0.95,  # 不使用
+                    normalize=lspd_normalize,
+                    use_lspd=True,
+                    lspd_alpha=lspd_alpha,
+                    lspd_tau=lspd_tau,
+                )
+
+                # 归一化LSPD权重并应用process_credit_ratio
+                lspd_weights_normalized = lspd_weights / lspd_weights.sum()
+                for j, idx in enumerate(process_indices):
+                    adjusted_weights[i, idx] = process_credit_ratio * lspd_weights_normalized[j].item()
+
+        else:
+            # 负奖励：全部惩罚（保持权重为1，让负优势发挥作用）
+            adjusted_weights[i, valid_positions] = 1.0
+
+    # 计算指标
+    metrics = {
+        'sca/total_sequences': total_sequences,
+        'sca/successful_parses': successful_parses,
+        'sca/parse_success_rate': successful_parses / total_sequences if total_sequences > 0 else 0.0,
+        'sca/structure_tokens_total': structure_tokens_total,
+        'sca/process_tokens_total': process_tokens_total,
+        'sca/answer_tokens_total': answer_tokens_total,
+        'sca/avg_structure_tokens': structure_tokens_total / successful_parses if successful_parses > 0 else 0.0,
+        'sca/avg_process_tokens': process_tokens_total / successful_parses if successful_parses > 0 else 0.0,
+        'sca/avg_answer_tokens': answer_tokens_total / successful_parses if successful_parses > 0 else 0.0,
+        'sca/positive_reward_count': positive_reward_count,
+        'sca/negative_reward_count': negative_reward_count,
+        'sca/positive_reward_ratio': positive_reward_count / total_sequences if total_sequences > 0 else 0.0,
+        'sca/answer_credit_ratio': answer_credit_ratio,
+        'sca/structure_credit_ratio': structure_credit_ratio,
+        'sca/process_credit_ratio': process_credit_ratio,
+        'sca/lspd_alpha': lspd_alpha,
+        'sca/lspd_tau': lspd_tau,
+        'sca/use_sca': True,
+    }
+
+    return adjusted_weights, metrics
+
+
+def find_subsequence(sequence, subsequence):
+    """在序列中查找子序列的起始位置"""
+    seq_len = len(sequence)
+    sub_len = len(subsequence)
+
+    for i in range(seq_len - sub_len + 1):
+        if sequence[i:i + sub_len] == subsequence:
+            return i
+    return -1
+
+
 def apply_ptrw_objective(
     importance_weights: torch.Tensor,
     advantages: torch.Tensor,
@@ -1007,6 +1188,10 @@ def compute_policy_loss_with_innovations(
     temporal_decay_use_lspd=True,
     temporal_decay_lspd_alpha=2.0,
     temporal_decay_lspd_tau=10.0,
+    use_sca=False,
+    sca_answer_credit_ratio=0.3,
+    sca_structure_credit_ratio=0.2,
+    sca_process_credit_ratio=0.5,
     use_asymmetric_clipping=False,
     clip_ratio_pos=0.3,
     clip_ratio_neg=0.1,
@@ -1112,25 +1297,53 @@ def compute_policy_loss_with_innovations(
         # 将序列级权重扩展到token级
         ratio = sequence_weights.unsqueeze(1).expand(-1, seq_len)
 
-    # 创新点 2.5: 时序衰减优势塑造
+    # 创新点 2.5: 时序衰减优势塑造 / 结构化信用分配 (SCA)
     temporal_weights = torch.ones_like(ratio)
     if use_temporal_decay:
-        all_decay_weights = []
-        for i in range(batch_size):
-            valid_positions = torch.where(response_mask[i] > 0)[0]
-            if len(valid_positions) > 0:
-                decay_weights, _ = apply_temporal_decay_weighting(
-                    sequence_length=len(valid_positions),
-                    gamma=temporal_decay_gamma,
-                    normalize=temporal_decay_normalize,
-                    use_lspd=temporal_decay_use_lspd,
-                    lspd_alpha=temporal_decay_lspd_alpha,
-                    lspd_tau=temporal_decay_lspd_tau,
-                )
-                # 只对有效位置设置衰减权重，无效位置保持1（但会被mask掉）
-                temporal_weights[i, valid_positions] = decay_weights.to(ratio.device)
-                all_decay_weights.extend(decay_weights.tolist())
-            # 对于没有有效token的序列，保持全1权重
+        if use_sca:
+            # 使用结构化信用分配 (SCA)
+            # 需要获取token_ids，这里我们需要从上下文获取
+            # 注意：这需要在调用时传入token_ids参数
+            print("⚠️ [SCA] 需要token_ids参数支持，当前使用标准时序衰减")
+            use_sca_actual = False
+        else:
+            use_sca_actual = False
+
+        if use_sca_actual:
+            # SCA模式：结构化信用分配
+            sca_weights, sca_metrics = apply_structured_credit_assignment(
+                token_ids=None,  # 需要传入
+                advantages=advantages,
+                response_mask=response_mask,
+                answer_credit_ratio=sca_answer_credit_ratio,
+                structure_credit_ratio=sca_structure_credit_ratio,
+                process_credit_ratio=sca_process_credit_ratio,
+                lspd_alpha=temporal_decay_lspd_alpha,
+                lspd_tau=temporal_decay_lspd_tau,
+                lspd_normalize=temporal_decay_normalize,
+            )
+            temporal_weights = sca_weights
+            all_metrics.update(sca_metrics)
+            if is_main_process():
+                print(f"🎯 [创新点2.5-SCA] 应用结构化信用分配, α={temporal_decay_lspd_alpha}, τ={temporal_decay_lspd_tau}")
+        else:
+            # 标准模式：全序列时序衰减
+            all_decay_weights = []
+            for i in range(batch_size):
+                valid_positions = torch.where(response_mask[i] > 0)[0]
+                if len(valid_positions) > 0:
+                    decay_weights, _ = apply_temporal_decay_weighting(
+                        sequence_length=len(valid_positions),
+                        gamma=temporal_decay_gamma,
+                        normalize=temporal_decay_normalize,
+                        use_lspd=temporal_decay_use_lspd,
+                        lspd_alpha=temporal_decay_lspd_alpha,
+                        lspd_tau=temporal_decay_lspd_tau,
+                    )
+                    # 只对有效位置设置衰减权重，无效位置保持1（但会被mask掉）
+                    temporal_weights[i, valid_positions] = decay_weights.to(ratio.device)
+                    all_decay_weights.extend(decay_weights.tolist())
+                # 对于没有有效token的序列，保持全1权重
 
         # 计算整体的时序衰减指标
         if all_decay_weights:

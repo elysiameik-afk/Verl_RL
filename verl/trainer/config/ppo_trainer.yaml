@@ -225,6 +225,12 @@ actor_rollout_ref:
     temporal_decay_lspd_alpha: 2.0  # LSPD衰减强度 α > 0
     temporal_decay_lspd_tau: 10.0  # LSPD时间尺度 τ > 0
 
+    # 结构化信用分配 (SCA) - 创新点2.5增强版
+    use_sca: False  # 是否启用结构化信用分配
+    sca_answer_credit_ratio: 0.3  # 答案部分信用比例
+    sca_structure_credit_ratio: 0.2  # 结构标记信用比例
+    sca_process_credit_ratio: 0.5  # 推理过程信用比例
+
     # 创新点 2.6: 正负优势的非对称策略优化
     use_asymmetric_clipping: False
     clip_ratio_pos: 0.3  # 正优势的裁剪范围 ε_pos

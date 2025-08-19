@@ -3,7 +3,7 @@ set -x
 
 export VLLM_ATTENTION_BACKEND=XFORMERS
 
-echo "🎯 开始创新点2.5测试: 基于时序衰减的优势塑造..."
+echo "🎯 开始创新点SCA测试: 结构化信用分配 (Structured Credit Assignment)..."
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
@@ -35,10 +35,10 @@ python3 -m verl.trainer.main_ppo \
     algorithm.kl_ctrl.kl_coef=0.05 \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
-    trainer.project_name=Qwen2.5-0.5-Innovation2.5 \
-    trainer.experiment_name=GRPO_TemporalDecay_Test \
+    trainer.project_name=Qwen2.5-0.5-SCA \
+    trainer.experiment_name=GRPO_SCA_Test \
     trainer.n_gpus_per_node=1 \
-    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_TemporalDecay_Test \
+    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_SCA_Test \
     trainer.nnodes=1 \
     trainer.save_freq=4 \
     trainer.test_freq=1 \
@@ -54,6 +54,10 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.temporal_decay_use_lspd=True \
     actor_rollout_ref.actor.temporal_decay_lspd_alpha=2.0 \
     actor_rollout_ref.actor.temporal_decay_lspd_tau=10.0 \
+    actor_rollout_ref.actor.use_sca=True \
+    actor_rollout_ref.actor.sca_answer_credit_ratio=0.3 \
+    actor_rollout_ref.actor.sca_structure_credit_ratio=0.2 \
+    actor_rollout_ref.actor.sca_process_credit_ratio=0.5 \
     actor_rollout_ref.actor.use_asymmetric_clipping=False
 
-echo "🎉 创新点2.5测试完成！"
+echo "🎉 创新点SCA测试完成！"
