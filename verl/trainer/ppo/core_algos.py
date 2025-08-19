@@ -1174,6 +1174,7 @@ def compute_policy_loss_with_innovations(
     cliprange_high=None,
     clip_ratio_c=3.0,
     loss_agg_mode: str = "token-mean",
+    token_ids=None,  # 添加token_ids参数用于SCA
     # 创新点配置
     use_ema_smoothing=False,
     ema_beta=0.9,
@@ -1300,19 +1301,10 @@ def compute_policy_loss_with_innovations(
     # 创新点 2.5: 时序衰减优势塑造 / 结构化信用分配 (SCA)
     temporal_weights = torch.ones_like(ratio)
     if use_temporal_decay:
-        if use_sca:
-            # 使用结构化信用分配 (SCA)
-            # 需要获取token_ids，这里我们需要从上下文获取
-            # 注意：这需要在调用时传入token_ids参数
-            print("⚠️ [SCA] 需要token_ids参数支持，当前使用标准时序衰减")
-            use_sca_actual = False
-        else:
-            use_sca_actual = False
-
-        if use_sca_actual:
+        if use_sca and token_ids is not None:
             # SCA模式：结构化信用分配
             sca_weights, sca_metrics = apply_structured_credit_assignment(
-                token_ids=None,  # 需要传入
+                token_ids=token_ids,
                 advantages=advantages,
                 response_mask=response_mask,
                 answer_credit_ratio=sca_answer_credit_ratio,
@@ -1326,7 +1318,14 @@ def compute_policy_loss_with_innovations(
             all_metrics.update(sca_metrics)
             if is_main_process():
                 print(f"🎯 [创新点2.5-SCA] 应用结构化信用分配, α={temporal_decay_lspd_alpha}, τ={temporal_decay_lspd_tau}")
-        else:
+                print(f"🎯 [SCA详情] 解析成功率={sca_metrics.get('sca/parse_success_rate', 0):.2f}, 正奖励比例={sca_metrics.get('sca/positive_reward_ratio', 0):.2f}")
+        elif use_sca and token_ids is None:
+            # SCA需要token_ids但未提供，降级为标准时序衰减
+            if is_main_process():
+                print("⚠️ [SCA] 需要token_ids参数，降级为标准时序衰减")
+            use_sca = False
+
+        if not use_sca:
             # 标准模式：全序列时序衰减
             all_decay_weights = []
             for i in range(batch_size):

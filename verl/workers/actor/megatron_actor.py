@@ -397,6 +397,7 @@ class MegatronPPOActor(BasePPOActor):
                     cliprange_high=clip_ratio_high,
                     clip_ratio_c=clip_ratio_c,
                     loss_agg_mode=loss_agg_mode,
+                    token_ids=responses,  # 传递token_ids用于SCA
                     # 创新点配置
                     use_ema_smoothing=self.use_ema_smoothing,
                     ema_beta=self.ema_beta,
