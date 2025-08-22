@@ -29,7 +29,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
 from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_policy_loss_with_innovations, kl_penalty
-from verl.utils.debug import GPUMemoryLogger
+from verl.utils.debug import GPUMemoryLogger, is_main_process
 from verl.utils.device import get_device_name, get_torch_device, is_cuda_available, is_npu_available
 from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_
 from verl.utils.py_functional import append_to_dict
@@ -92,6 +92,12 @@ class DataParallelPPOActor(BasePPOActor):
         self.sca_answer_credit_ratio = self.config.get("sca_answer_credit_ratio", 0.3)
         self.sca_structure_credit_ratio = self.config.get("sca_structure_credit_ratio", 0.2)
         self.sca_process_credit_ratio = self.config.get("sca_process_credit_ratio", 0.5)
+
+        # 创新点 2.6: HVR内生奖励配置
+        self.use_hvr = self.config.get("use_hvr", False)
+        self.hvr_alpha = self.config.get("hvr_alpha", 1.0)
+        self.hvr_beta = self.config.get("hvr_beta", 0.1)
+        self.hvr_lambda = self.config.get("hvr_lambda", 0.5)
         self.use_asymmetric_clipping = self.config.get("use_asymmetric_clipping", False)
         self.clip_ratio_pos = self.config.get("clip_ratio_pos", 0.3)
         self.clip_ratio_neg = self.config.get("clip_ratio_neg", 0.1)
@@ -258,6 +264,62 @@ class DataParallelPPOActor(BasePPOActor):
 
             return entropy, log_probs
 
+    def _forward_micro_batch_with_logits(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        扩展版本的_forward_micro_batch，额外返回logits用于HVR
+        Returns:
+            entropy: # (bs, response_len)
+            log_probs: # (bs, response_len)
+            logits: # (bs, response_len, vocab_size)
+        """
+        response_length = micro_batch["responses"].size(-1)
+        multi_modal_inputs = {}
+        if "multi_modal_inputs" in micro_batch.keys():
+            for key in micro_batch["multi_modal_inputs"][0].keys():
+                multi_modal_inputs[key] = torch.cat([inputs[key] for inputs in micro_batch["multi_modal_inputs"]], dim=0)
+
+        with torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
+            input_ids = micro_batch["input_ids"]
+            batch_size, seqlen = input_ids.shape
+            attention_mask = micro_batch["attention_mask"]
+            position_ids = micro_batch["position_ids"]
+            entropy = None
+            if position_ids.dim() == 3:  # qwen2vl mrope
+                position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
+
+            # 简化版本：只处理非remove_padding的情况，用于HVR
+            if not self.use_remove_padding:
+                extra_args = {}
+                if self.use_fused_kernels:
+                    extra_args["temperature"] = temperature
+                output = self.actor_module(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    **multi_modal_inputs,
+                    use_cache=False,
+                    **extra_args,
+                )
+
+                if self.use_fused_kernels:
+                    log_probs = output.log_probs[:, -response_length - 1 : -1]
+                    entropy = output.entropy[:, -response_length - 1 : -1]  # (bsz, response_length)
+                    # 对于fused kernels，我们无法获取原始logits，返回None
+                    logits = None
+                else:
+                    logits = output.logits
+                    logits.div_(temperature)
+                    logits = logits[:, -response_length - 1 : -1, :]  # (bsz, response_length, vocab_size)
+                    log_probs = logprobs_from_logits(logits, micro_batch["responses"])
+                    if calculate_entropy:
+                        entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
+            else:
+                # 对于remove_padding的情况，暂时不支持HVR
+                entropy, log_probs = self._forward_micro_batch(micro_batch, temperature, calculate_entropy)
+                logits = None
+
+            return entropy, log_probs, logits
+
     def _optimizer_step(self):
         assert self.config.grad_clip is not None
 
@@ -421,7 +483,38 @@ class DataParallelPPOActor(BasePPOActor):
                     calculate_entropy = False
                     if entropy_coeff != 0:
                         calculate_entropy = True
-                    entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy)
+
+                    # 🆕 创新点2.6: HVR内生奖励机制
+                    if self.use_hvr:
+                        # 使用扩展版本获取logits
+                        entropy, log_prob, response_logits = self._forward_micro_batch_with_logits(
+                            micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy
+                        )
+
+                        if response_logits is not None:
+                            # 应用HVR内生奖励
+                            from verl.trainer.ppo.core_algos import apply_hvr_integration
+                            enhanced_advantages, hvr_metrics = apply_hvr_integration(
+                                advantages=advantages,
+                                response_logits=response_logits,
+                                response_ids=responses,
+                                response_mask=response_mask,
+                                alpha=self.hvr_alpha,
+                                beta=self.hvr_beta,
+                                lambda_hvr=self.hvr_lambda,
+                            )
+                            advantages = enhanced_advantages
+                            metrics.update(hvr_metrics)
+
+                            if is_main_process():
+                                print(f"🎯 [创新点2.6-HVR] 应用内生奖励, α={self.hvr_alpha}, β={self.hvr_beta}, λ={self.hvr_lambda}")
+                                print(f"🎯 [HVR详情] 成功率={hvr_metrics.get('hvr/success_rate', 0):.2f}, R_final均值={hvr_metrics.get('hvr/r_final_mean', 0):.3f}")
+                        else:
+                            if is_main_process():
+                                print("⚠️ [HVR] 无法获取logits，跳过HVR处理")
+                    else:
+                        # 使用标准版本
+                        entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy)
 
                     # Use comprehensive innovation-enabled policy loss computation
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, innovation_metrics = compute_policy_loss_with_innovations(

@@ -1039,6 +1039,227 @@ def find_subsequence(sequence, subsequence):
     return -1
 
 
+def calculate_ervf_value(
+    logits: torch.Tensor,
+    alpha: float = 1.0,
+    beta: float = 0.1,
+) -> float:
+    """
+    创新点 2.6: 计算熵正则化价值函数 (ERVF)
+
+    基于EndoRM思想，但加入熵惩罚来减少决策不确定性
+
+    Args:
+        logits: [vocab_size] - 模型在当前状态的logits输出
+        alpha: float - 温度系数 α
+        beta: float - 熵惩罚权重 β
+
+    Returns:
+        float: 熵正则化价值 V_ervf(s_t)
+    """
+    # 1. 计算LSE价值 V_endo (EndoRM基础价值)
+    v_endo = alpha * torch.logsumexp(logits / alpha, dim=0)
+
+    # 2. 计算策略熵 H
+    probs = torch.softmax(logits, dim=0)
+    # 避免log(0)，添加小的epsilon
+    epsilon = 1e-8
+    entropy = -torch.sum(probs * torch.log(probs + epsilon))
+
+    # 3. 计算最终的熵正则化价值
+    v_ervf = v_endo - beta * entropy
+
+    return v_ervf.item()
+
+
+def calculate_hvr_rewards(
+    response_logits: torch.Tensor,
+    response_ids: torch.Tensor,
+    R_final: float,
+    alpha: float = 1.0,
+    beta: float = 0.1,
+    lambda_hvr: float = 0.5,
+) -> torch.Tensor:
+    """
+    创新点 2.6: 计算HVR稠密奖励 (Hindsight Value Reshaping)
+
+    结合稀疏奖励R_final和ERVF价值函数，生成稠密的过程性奖励
+
+    Args:
+        response_logits: [seq_len, vocab_size] - 每步的logits
+        response_ids: [seq_len] - 实际生成的token序列
+        R_final: float - 最终稀疏奖励 ∈ [-3, 3]
+        alpha: float - 温度系数
+        beta: float - 熵惩罚权重
+        lambda_hvr: float - HVR混合因子 ∈ [0, 1]
+
+    Returns:
+        torch.Tensor: [seq_len] - 稠密奖励序列
+    """
+    seq_len, vocab_size = response_logits.shape
+    device = response_logits.device
+
+    # 1. 计算价值轨迹 V_ervf_list (长度为L+1)
+    v_ervf_list = []
+
+    # 计算L个状态的价值
+    for t in range(seq_len):
+        logits_t = response_logits[t]  # [vocab_size]
+        v_ervf_t = calculate_ervf_value(logits_t, alpha, beta)
+        v_ervf_list.append(v_ervf_t)
+
+    # 添加终止状态价值 V(s_{L+1}) = 0
+    v_ervf_list.append(0.0)
+
+    # 2. 计算重塑目标 V_target
+    v_max = max(v_ervf_list[:-1])  # 排除终止状态
+    v_min = min(v_ervf_list[:-1])
+
+    # 将R_final归一化到[0,1]
+    p = (R_final + 3.0) / 6.0  # R_final ∈ [-3,3] -> p ∈ [0,1]
+    v_target = (1 - p) * v_min + p * v_max
+
+    # 3. 计算重塑后的价值轨迹 V_hvr_list
+    v_hvr_list = []
+    for v in v_ervf_list:
+        v_hvr = (1 - lambda_hvr) * v + lambda_hvr * v_target
+        v_hvr_list.append(v_hvr)
+
+    # 4. 计算稠密奖励 r_hvr_list
+    r_hvr_list = []
+
+    for t in range(seq_len):
+        # 获取当前步的log概率
+        logits_t = response_logits[t]  # [vocab_size]
+        token_id_t = response_ids[t].item()
+
+        # 使用数值稳定的log_softmax
+        log_probs_t = torch.log_softmax(logits_t, dim=0)
+        log_prob_t = log_probs_t[token_id_t].item()
+
+        # HVR奖励公式: r_hvr_t = α * log_prob_t + V_hvr[t] - V_hvr[t+1]
+        r_hvr_t = alpha * log_prob_t + v_hvr_list[t] - v_hvr_list[t + 1]
+        r_hvr_list.append(r_hvr_t)
+
+    # 5. 将最终奖励加到最后一步
+    r_hvr_list[-1] += R_final
+
+    return torch.tensor(r_hvr_list, dtype=torch.float32, device=device)
+
+
+def apply_hvr_integration(
+    advantages: torch.Tensor,
+    response_logits: torch.Tensor,
+    response_ids: torch.Tensor,
+    response_mask: torch.Tensor,
+    alpha: float = 1.0,
+    beta: float = 0.1,
+    lambda_hvr: float = 0.5,
+) -> tuple[torch.Tensor, dict]:
+    """
+    创新点 2.6: 将HVR内生奖励集成到advantages中
+
+    Args:
+        advantages: [batch_size, seq_len] - 原始优势
+        response_logits: [batch_size, seq_len, vocab_size] - 响应logits
+        response_ids: [batch_size, seq_len] - 响应token IDs
+        response_mask: [batch_size, seq_len] - 有效token mask
+        alpha: float - 温度系数
+        beta: float - 熵惩罚权重
+        lambda_hvr: float - HVR混合因子
+
+    Returns:
+        tuple: (enhanced_advantages, metrics)
+    """
+    batch_size, seq_len = advantages.shape
+    enhanced_advantages = advantages.clone()
+
+    # 统计指标
+    total_sequences = 0
+    successful_hvr_count = 0
+    r_final_values = []
+    hvr_reward_means = []
+    hvr_reward_stds = []
+    v_ervf_means = []
+    entropy_means = []
+
+    for i in range(batch_size):
+        valid_positions = torch.where(response_mask[i] > 0)[0]
+        if len(valid_positions) == 0:
+            continue
+
+        total_sequences += 1
+
+        # 提取R_final (从最后一个有效token的advantage)
+        last_valid_pos = valid_positions[-1].item()
+        r_final = advantages[i, last_valid_pos].item()
+        r_final_values.append(r_final)
+
+        # 获取有效部分的logits和token_ids
+        valid_logits = response_logits[i, valid_positions]  # [valid_len, vocab_size]
+        valid_ids = response_ids[i, valid_positions]  # [valid_len]
+
+        try:
+            # 计算HVR奖励
+            hvr_rewards = calculate_hvr_rewards(
+                response_logits=valid_logits,
+                response_ids=valid_ids,
+                R_final=r_final,
+                alpha=alpha,
+                beta=beta,
+                lambda_hvr=lambda_hvr,
+            )
+
+            # 将HVR奖励应用到advantages中
+            enhanced_advantages[i, valid_positions] = hvr_rewards.to(advantages.device)
+
+            successful_hvr_count += 1
+            hvr_reward_means.append(hvr_rewards.mean().item())
+            hvr_reward_stds.append(hvr_rewards.std().item())
+
+            # 计算ERVF统计
+            v_ervf_values = []
+            entropy_values = []
+            for t in range(len(valid_positions)):
+                logits_t = valid_logits[t]
+                v_ervf = calculate_ervf_value(logits_t, alpha, beta)
+                v_ervf_values.append(v_ervf)
+
+                # 计算熵
+                probs = torch.softmax(logits_t, dim=0)
+                entropy = -torch.sum(probs * torch.log(probs + 1e-8)).item()
+                entropy_values.append(entropy)
+
+            v_ervf_means.append(np.mean(v_ervf_values))
+            entropy_means.append(np.mean(entropy_values))
+
+        except Exception as e:
+            # HVR计算失败，保持原始advantages
+            print(f"⚠️ [HVR] 序列{i}计算失败: {e}")
+            continue
+
+    # 计算指标
+    metrics = {
+        'hvr/total_sequences': total_sequences,
+        'hvr/successful_hvr_count': successful_hvr_count,
+        'hvr/success_rate': successful_hvr_count / total_sequences if total_sequences > 0 else 0.0,
+        'hvr/r_final_mean': np.mean(r_final_values) if r_final_values else 0.0,
+        'hvr/r_final_std': np.std(r_final_values) if r_final_values else 0.0,
+        'hvr/r_final_min': min(r_final_values) if r_final_values else 0.0,
+        'hvr/r_final_max': max(r_final_values) if r_final_values else 0.0,
+        'hvr/hvr_reward_mean': np.mean(hvr_reward_means) if hvr_reward_means else 0.0,
+        'hvr/hvr_reward_std': np.mean(hvr_reward_stds) if hvr_reward_stds else 0.0,
+        'hvr/v_ervf_mean': np.mean(v_ervf_means) if v_ervf_means else 0.0,
+        'hvr/entropy_mean': np.mean(entropy_means) if entropy_means else 0.0,
+        'hvr/alpha': alpha,
+        'hvr/beta': beta,
+        'hvr/lambda_hvr': lambda_hvr,
+        'hvr/use_hvr': True,
+    }
+
+    return enhanced_advantages, metrics
+
+
 def apply_ptrw_objective(
     importance_weights: torch.Tensor,
     advantages: torch.Tensor,

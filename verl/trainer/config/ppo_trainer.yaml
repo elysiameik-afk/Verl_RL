@@ -231,6 +231,12 @@ actor_rollout_ref:
     sca_structure_credit_ratio: 0.2  # 结构标记信用比例
     sca_process_credit_ratio: 0.5  # 推理过程信用比例
 
+    # 创新点 2.6: HVR内生奖励机制 (Hindsight Value Reshaping)
+    use_hvr: False  # 是否启用HVR内生奖励
+    hvr_alpha: 1.0  # 温度系数 α
+    hvr_beta: 0.1  # 熵惩罚权重 β
+    hvr_lambda: 0.5  # HVR混合因子 λ ∈ [0,1]
+
     # 创新点 2.6: 正负优势的非对称策略优化
     use_asymmetric_clipping: False
     clip_ratio_pos: 0.3  # 正优势的裁剪范围 ε_pos

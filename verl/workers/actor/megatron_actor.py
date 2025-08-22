@@ -155,6 +155,12 @@ class MegatronPPOActor(BasePPOActor):
         self.sca_answer_credit_ratio = self.config.get("sca_answer_credit_ratio", 0.3)
         self.sca_structure_credit_ratio = self.config.get("sca_structure_credit_ratio", 0.2)
         self.sca_process_credit_ratio = self.config.get("sca_process_credit_ratio", 0.5)
+
+        # 创新点 2.6: HVR内生奖励配置
+        self.use_hvr = self.config.get("use_hvr", False)
+        self.hvr_alpha = self.config.get("hvr_alpha", 1.0)
+        self.hvr_beta = self.config.get("hvr_beta", 0.1)
+        self.hvr_lambda = self.config.get("hvr_lambda", 0.5)
         self.use_asymmetric_clipping = self.config.get("use_asymmetric_clipping", False)
         self.clip_ratio_pos = self.config.get("clip_ratio_pos", 0.3)
         self.clip_ratio_neg = self.config.get("clip_ratio_neg", 0.1)
@@ -380,6 +386,13 @@ class MegatronPPOActor(BasePPOActor):
             if not forward_only:
                 old_log_prob = data["old_log_probs"]
                 advantages = data["advantages"]
+
+                # 🆕 创新点2.6: HVR内生奖励机制
+                if self.use_hvr:
+                    # 在megatron_actor中暂时不支持HVR，因为需要原始logits
+                    from verl.utils.debug import is_main_process
+                    if is_main_process():
+                        print("⚠️ [HVR] Megatron Actor暂不支持HVR，请使用DataParallel Actor")
 
                 clip_ratio = meta_info["clip_ratio"]
                 clip_ratio_low = self.config.clip_ratio_low if self.config.clip_ratio_low is not None else clip_ratio
