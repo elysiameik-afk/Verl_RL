@@ -1200,7 +1200,7 @@ def apply_hvr_integration(
         valid_ids = response_ids[i, valid_positions]  # [valid_len]
 
         try:
-            # 计算HVR奖励
+            # 计算HVR奖励 (保守优化：确保计算完成后立即清理)
             hvr_rewards = calculate_hvr_rewards(
                 response_logits=valid_logits,
                 response_ids=valid_ids,
@@ -1216,6 +1216,9 @@ def apply_hvr_integration(
             successful_hvr_count += 1
             hvr_reward_means.append(hvr_rewards.mean().item())
             hvr_reward_stds.append(hvr_rewards.std().item())
+
+            # 立即释放当前序列的HVR奖励张量
+            del hvr_rewards
 
             # 计算ERVF统计
             v_ervf_values = []

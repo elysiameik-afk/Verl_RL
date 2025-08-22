@@ -492,17 +492,23 @@ class DataParallelPPOActor(BasePPOActor):
                         )
 
                         if response_logits is not None:
-                            # 应用HVR内生奖励
-                            from verl.trainer.ppo.core_algos import apply_hvr_integration
-                            enhanced_advantages, hvr_metrics = apply_hvr_integration(
-                                advantages=advantages,
-                                response_logits=response_logits,
-                                response_ids=responses,
-                                response_mask=response_mask,
-                                alpha=self.hvr_alpha,
-                                beta=self.hvr_beta,
-                                lambda_hvr=self.hvr_lambda,
-                            )
+                            # 立即处理HVR并释放logits显存
+                            with torch.no_grad():  # HVR计算不需要梯度
+                                from verl.trainer.ppo.core_algos import apply_hvr_integration
+                                enhanced_advantages, hvr_metrics = apply_hvr_integration(
+                                    advantages=advantages,
+                                    response_logits=response_logits,
+                                    response_ids=responses,
+                                    response_mask=response_mask,
+                                    alpha=self.hvr_alpha,
+                                    beta=self.hvr_beta,
+                                    lambda_hvr=self.hvr_lambda,
+                                )
+                            # 立即释放logits显存 (保守优化)
+                            del response_logits
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+
                             advantages = enhanced_advantages
                             metrics.update(hvr_metrics)
 
