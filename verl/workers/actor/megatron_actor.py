@@ -390,7 +390,7 @@ class MegatronPPOActor(BasePPOActor):
                 # 🆕 创新点2.6: HVR内生奖励机制
                 if self.use_hvr:
                     # 在megatron_actor中暂时不支持HVR，因为需要原始logits
-                    from verl.utils.debug import is_main_process
+                    from verl.trainer.ppo.core_algos import is_main_process
                     if is_main_process():
                         print("⚠️ [HVR] Megatron Actor暂不支持HVR，请使用DataParallel Actor")
 
