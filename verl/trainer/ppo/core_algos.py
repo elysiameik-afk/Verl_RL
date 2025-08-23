@@ -1115,8 +1115,9 @@ def calculate_hvr_rewards(
     v_max = max(v_ervf_list[:-1])  # 排除终止状态
     v_min = min(v_ervf_list[:-1])
 
-    # 将R_final归一化到[0,1]
-    p = (R_final + 3.0) / 6.0  # R_final ∈ [-3,3] -> p ∈ [0,1]
+    # 将R_final归一化到[0,1] (适应advantages的范围)
+    # 使用sigmoid函数将任意范围的advantage映射到[0,1]
+    p = torch.sigmoid(torch.tensor(R_final)).item()
     v_target = (1 - p) * v_min + p * v_max
 
     # 3. 计算重塑后的价值轨迹 V_hvr_list
@@ -1190,17 +1191,16 @@ def apply_hvr_integration(
 
         total_sequences += 1
 
-        # 提取R_final (从最后一个有效token的advantage)
-        last_valid_pos = valid_positions[-1].item()
-        r_final = advantages[i, last_valid_pos].item()
-        r_final_values.append(r_final)
+        # 使用序列平均advantage作为序列级信号 (替代R_final)
+        # 因为在GRPO中无法直接获取原始稀疏奖励，我们使用advantages的均值
+        sequence_advantage_mean = advantages[i, valid_positions].mean().item()
+        r_final_values.append(sequence_advantage_mean)
 
-        # 调试：打印R_final提取信息
+        # 调试：打印序列级信号提取信息
         if i == 0 and is_main_process():  # 只打印第一个序列的调试信息
-            print(f"🔍 [HVR调试] 序列{i}: 有效长度={len(valid_positions)}, 最后位置={last_valid_pos}")
-            print(f"🔍 [HVR调试] advantages[{i}, {last_valid_pos}] = {r_final}")
-            print(f"🔍 [HVR调试] advantages[{i}, :5] = {advantages[i, :5].tolist()}")  # 前5个
-            print(f"🔍 [HVR调试] advantages[{i}, -5:] = {advantages[i, -5:].tolist()}")  # 后5个
+            print(f"🔍 [HVR调试] 序列{i}: 有效长度={len(valid_positions)}")
+            print(f"🔍 [HVR调试] 序列平均advantage: {sequence_advantage_mean:.6f}")
+            print(f"🔍 [HVR调试] advantage范围: [{advantages[i, valid_positions].min().item():.6f}, {advantages[i, valid_positions].max().item():.6f}]")
 
         # 获取有效部分的logits和token_ids
         valid_logits = response_logits[i, valid_positions]  # [valid_len, vocab_size]
@@ -1211,7 +1211,7 @@ def apply_hvr_integration(
             hvr_rewards = calculate_hvr_rewards(
                 response_logits=valid_logits,
                 response_ids=valid_ids,
-                R_final=r_final,
+                R_final=sequence_advantage_mean,  # 使用序列平均advantage作为序列级信号
                 alpha=alpha,
                 beta=beta,
                 lambda_hvr=lambda_hvr,

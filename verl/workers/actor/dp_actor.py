@@ -474,11 +474,17 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # 🔍 调试：检查data中的可用字段
                     if self.use_hvr and is_main_process():
-                        print(f"🔍 [HVR调试] data字段: {list(data.keys())}")
-                        if "rewards" in data:
-                            print(f"🔍 [HVR调试] 找到rewards字段")
-                        if "values" in data:
-                            print(f"🔍 [HVR调试] 找到values字段")
+                        print(f"🔍 [HVR调试] data.batch字段: {list(data.batch.keys())}")
+                        print(f"🔍 [HVR调试] data.non_tensor_batch字段: {list(data.non_tensor_batch.keys()) if hasattr(data, 'non_tensor_batch') else 'None'}")
+
+                        # 检查可能包含原始奖励的字段
+                        reward_fields = ["token_level_rewards", "token_level_scores", "rewards", "rm_scores"]
+                        for field in reward_fields:
+                            if field in data.batch:
+                                print(f"🔍 [HVR调试] 找到奖励字段: {field}")
+                                sample_rewards = data.batch[field][0]  # 第一个序列
+                                print(f"🔍 [HVR调试] {field}形状: {sample_rewards.shape}")
+                                print(f"🔍 [HVR调试] {field}非零值: {sample_rewards[sample_rewards != 0].tolist()}")
 
                     clip_ratio = self.config.clip_ratio
                     clip_ratio_low = self.config.clip_ratio_low if self.config.clip_ratio_low is not None else clip_ratio

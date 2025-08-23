@@ -1,0 +1,141 @@
+# HVR (Hindsight Value Reshaping) 内生奖励训练配置
+# 基于EndoRM思想的内生奖励机制，使用模型自身logits计算价值函数
+
+defaults:
+  - _self_
+  - data: sft_data
+  - model: qwen2_5_0_5b
+  - reward_model: logic_rl_reward
+  - algorithm: grpo  # 基础算法框架，但会被HVR替代
+
+# 训练器配置
+trainer:
+  project_name: "HVR-IntrinsicReward"
+  experiment_name: "HVR_ERVF_Test"
+  
+  # 分布式配置
+  nnodes: 1
+  n_gpus_per_node: 1
+  
+  # 训练配置
+  total_epochs: 10
+  save_freq: 2
+  test_freq: 1
+  
+  # 日志配置
+  logger: ['wandb']
+  default_local_dir: "./hvr_checkpoints"
+  
+  # 调试配置
+  critic_warmup: 0  # HVR不需要critic
+
+# Actor配置 (HVR专用)
+actor_rollout_ref:
+  actor:
+    # 基础配置
+    optim:
+      lr: 3e-6
+      weight_decay: 0.01
+    
+    # 批次配置
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 4
+    
+    # HVR必需配置
+    use_remove_padding: False  # HVR需要完整logits
+    
+    # HVR核心参数
+    hvr_alpha: 1.0      # 温度系数 α - 控制LSE价值函数的温度
+    hvr_beta: 0.1       # 熵惩罚权重 β - 控制决策不确定性惩罚
+    hvr_lambda: 0.5     # HVR混合因子 λ - 控制价值重塑强度
+    hvr_cliprange: 0.2  # 策略裁剪范围
+    
+    # FSDP配置
+    fsdp_config:
+      param_offload: True
+      optimizer_offload: True
+    
+    # 梯度配置
+    grad_clip: 1.0
+    
+    # 禁用其他创新点 (HVR是独立系统)
+    use_ema_smoothing: False
+    use_gradient_adaptive_weighting: False
+    use_amic: False
+    use_ptrw: False
+    use_temporal_decay: False
+    use_sca: False
+    use_asymmetric_clipping: False
+  
+  # 模型配置
+  model:
+    path: "/path/to/your/model"  # 需要根据实际路径修改
+    use_remove_padding: False    # 与actor保持一致
+    enable_gradient_checkpointing: True
+  
+  # Rollout配置 (复用现有配置)
+  rollout:
+    name: vllm
+    gpu_memory_utilization: 0.5
+    n: 8
+    log_prob_micro_batch_size_per_gpu: 8
+    max_num_batched_tokens: 16384
+    tensor_model_parallel_size: 1
+  
+  # Reference配置 (复用现有配置)
+  ref:
+    log_prob_micro_batch_size_per_gpu: 8
+    fsdp_config:
+      param_offload: False
+
+# 数据配置
+data:
+  train_files: "/path/to/train.parquet"  # 需要根据实际路径修改
+  val_files: "/path/to/val.parquet"      # 需要根据实际路径修改
+  train_batch_size: 16
+  val_batch_size: 8
+  max_prompt_length: 4096
+  max_response_length: 2048
+
+# 奖励模型配置 (复用logic_rl)
+reward_model:
+  reward_manager: logic_rl  # 使用现有的稀疏奖励计算
+
+# 算法配置 (HVR特定)
+algorithm:
+  adv_estimator: hvr  # 使用HVR替代GAE
+  
+  # KL控制 (保留用于稳定性)
+  kl_ctrl:
+    kl_coef: 0.05
+    
+  # HVR特定配置
+  hvr:
+    use_intrinsic_reward: True
+    combine_sparse_dense: True
+    
+# HVR实验配置
+hvr_experiment:
+  # 消融实验配置
+  ablation:
+    disable_entropy_penalty: False  # 是否禁用熵惩罚 (测试ERVF vs EndoRM)
+    disable_value_reshaping: False  # 是否禁用价值重塑 (测试直接使用ERVF)
+    use_standard_ppo: False         # 是否回退到标准PPO (对比实验)
+  
+  # 参数扫描配置
+  param_sweep:
+    alpha_values: [0.5, 1.0, 2.0, 4.0]      # α参数扫描
+    beta_values: [0.0, 0.05, 0.1, 0.2, 0.5] # β参数扫描
+    lambda_values: [0.0, 0.3, 0.5, 0.7, 1.0] # λ参数扫描
+  
+  # 指标记录配置
+  metrics:
+    log_value_trajectory: True      # 是否记录价值轨迹
+    log_reward_distribution: True   # 是否记录奖励分布
+    log_entropy_evolution: True     # 是否记录熵演化
+    
+# 调试配置
+debug:
+  print_hvr_details: True          # 是否打印HVR详细信息
+  save_intermediate_results: False # 是否保存中间结果
+  validate_hvr_math: True          # 是否验证HVR数学计算
