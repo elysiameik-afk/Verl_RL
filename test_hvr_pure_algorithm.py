@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-测试HVR在GRPO框架中的集成实现
+测试HVR Manager的集成实现
 
-验证ERVF价值函数和HVR奖励重塑在GRPO中的正确性
+验证HVR Logic RL Manager的正确性和完整性
 """
 
 import torch
@@ -13,6 +13,32 @@ from verl.trainer.ppo.core_algos import (
     calculate_hvr_rewards_for_group,
     aggregate_hvr_metrics_dict
 )
+
+# 测试HVR Manager
+def test_hvr_manager():
+    """测试HVR Manager的基本功能"""
+    print("🎯 测试HVR Manager\n")
+
+    try:
+        from verl.trainer.ppo.reward_manager.hvr_logic_rl_reward import HVRLogicRLRewardManager
+
+        # 创建HVR Manager
+        manager = HVRLogicRLRewardManager(
+            tokenizer=None,  # 简化测试
+            num_examine=1,
+            hvr_alpha=1.0,
+            hvr_beta=0.1,
+            hvr_lambda=0.5
+        )
+
+        print("✅ HVR Manager创建成功")
+        print(f"   参数: α={manager.hvr_alpha}, β={manager.hvr_beta}, λ={manager.hvr_lambda}")
+
+        return True
+
+    except Exception as e:
+        print(f"❌ HVR Manager测试失败: {e}")
+        return False
 
 def test_ervf_value_function():
     """测试ERVF价值函数"""
@@ -116,87 +142,32 @@ def test_hvr_parameter_sensitivity():
     # 测试α参数影响
     print("📈 α (温度系数) 参数影响:")
     alphas = [0.5, 1.0, 2.0, 4.0]
+    # 需要使用组数据格式
+    group_data = [{'logits': response_logits, 'ids': response_ids, 'r_final': r_final}]
+
     for alpha in alphas:
-        hvr_rewards, metrics = calculate_hvr_rewards(
-            response_logits, response_ids, r_final,
-            alpha=alpha, beta=0.1, lambda_hvr=0.5
+        group_returns, metrics = calculate_hvr_rewards_for_group(
+            group_data, alpha=alpha, beta=0.1, lambda_hvr=0.5
         )
-        print(f"  α={alpha}: 奖励均值={hvr_rewards.mean().item():.4f}, "
-              f"ERVF均值={metrics.ervf_value_mean:.4f}")
+        print(f"  α={alpha}: 组回报={group_returns[0]:.4f}")
     
     print("\n📈 β (熵惩罚) 参数影响:")
     betas = [0.0, 0.05, 0.1, 0.2, 0.5]
     for beta in betas:
-        hvr_rewards, metrics = calculate_hvr_rewards(
-            response_logits, response_ids, r_final,
-            alpha=1.0, beta=beta, lambda_hvr=0.5
+        group_returns, metrics = calculate_hvr_rewards_for_group(
+            group_data, alpha=1.0, beta=beta, lambda_hvr=0.5
         )
-        print(f"  β={beta}: 奖励均值={hvr_rewards.mean().item():.4f}, "
-              f"熵均值={metrics.entropy_mean:.4f}")
-    
+        print(f"  β={beta}: 组回报={group_returns[0]:.4f}")
+
     print("\n📈 λ (混合因子) 参数影响:")
     lambdas = [0.0, 0.3, 0.5, 0.7, 1.0]
     for lambda_hvr in lambdas:
-        hvr_rewards, metrics = calculate_hvr_rewards(
-            response_logits, response_ids, r_final,
-            alpha=1.0, beta=0.1, lambda_hvr=lambda_hvr
+        group_returns, metrics = calculate_hvr_rewards_for_group(
+            group_data, alpha=1.0, beta=0.1, lambda_hvr=lambda_hvr
         )
-        print(f"  λ={lambda_hvr}: 奖励均值={hvr_rewards.mean().item():.4f}, "
-              f"重塑比例={metrics.value_reshaping_ratio:.1f}")
+        print(f"  λ={lambda_hvr}: 组回报={group_returns[0]:.4f}")
 
-def test_hvr_policy_loss():
-    """测试HVR策略损失"""
-    print("\n🔧 测试HVR策略损失计算\n")
-    
-    # 创建测试数据
-    batch_size = 2
-    seq_len = 5
-    
-    log_probs = torch.randn(batch_size, seq_len)
-    hvr_rewards = torch.randn(batch_size, seq_len)
-    response_mask = torch.ones(batch_size, seq_len)
-    response_mask[0, 3:] = 0  # 第一个序列长度为3
-    response_mask[1, 4:] = 0  # 第二个序列长度为4
-    
-    # 计算策略损失
-    policy_loss, metrics = hvr_policy_loss(
-        log_probs=log_probs,
-        hvr_rewards=hvr_rewards,
-        response_mask=response_mask,
-        cliprange=0.2,
-        loss_agg_mode="token-mean",
-    )
-    
-    print(f"策略损失: {policy_loss.item():.6f}")
-    print(f"HVR优势均值: {metrics['hvr_advantages_mean']:.6f}")
-    print(f"Log概率均值: {metrics['hvr_log_probs_mean']:.6f}")
-
-def test_metrics_aggregation():
-    """测试指标聚合"""
-    print("\n📊 测试指标聚合\n")
-    
-    # 创建多个序列的指标
-    from verl.trainer.hvr.hvr_core_algos import HVRMetrics
-    
-    metrics_list = []
-    for i in range(3):
-        metrics = HVRMetrics(
-            ervf_value_mean=1.0 + i * 0.1,
-            entropy_mean=2.0 + i * 0.1,
-            hvr_reward_mean=0.5 + i * 0.1,
-            r_final_mean=[-1, 0, 1][i],
-            total_sequences=1,
-            successful_hvr_count=1,
-            success_rate=1.0,
-        )
-        metrics_list.append(metrics)
-    
-    # 聚合指标
-    aggregated = aggregate_hvr_metrics(metrics_list)
-    
-    print("聚合后的指标:")
-    for key, value in aggregated.items():
-        print(f"  {key}: {value}")
+# 移除不再需要的测试函数
 
 def test_edge_cases():
     """测试边界情况"""
@@ -204,28 +175,29 @@ def test_edge_cases():
     
     # 测试极短序列
     print("📏 极短序列 (长度=1):")
-    short_logits = torch.randn(1, 100)
-    short_ids = torch.randint(0, 100, (1,))
-    short_rewards, short_metrics = calculate_hvr_rewards(short_logits, short_ids, 1.0)
-    print(f"  奖励: {short_rewards.tolist()}")
-    print(f"  成功率: {short_metrics.success_rate}")
-    
+    short_group_data = [{'logits': torch.randn(1, 100), 'ids': torch.randint(0, 100, (1,)), 'r_final': 1.0}]
+    short_returns, short_metrics = calculate_hvr_rewards_for_group(short_group_data, 1.0, 0.1, 0.5)
+    print(f"  组回报: {short_returns}")
+    print(f"  成功率: {short_metrics.get('successful_count', 0) / short_metrics.get('total_count', 1)}")
+
     # 测试极端R_final值
     print("\n📊 极端R_final值:")
     normal_logits = torch.randn(3, 100)
     normal_ids = torch.randint(0, 100, (3,))
-    
+
     extreme_r_finals = [-3.0, 3.0]
     for r_final in extreme_r_finals:
-        rewards, _ = calculate_hvr_rewards(normal_logits, normal_ids, r_final)
-        print(f"  R_final={r_final}: 奖励范围=[{rewards.min().item():.3f}, {rewards.max().item():.3f}]")
-    
+        test_group_data = [{'logits': normal_logits, 'ids': normal_ids, 'r_final': r_final}]
+        returns, _ = calculate_hvr_rewards_for_group(test_group_data, 1.0, 0.1, 0.5)
+        print(f"  R_final={r_final}: 组回报={returns[0]:.3f}")
+
     # 测试数值稳定性
     print("\n🔢 数值稳定性测试:")
     large_logits = torch.randn(3, 100) * 10  # 大logits
-    large_rewards, _ = calculate_hvr_rewards(large_logits, normal_ids, 0.0)
-    print(f"  大logits: NaN检查={'❌' if torch.isnan(large_rewards).any() else '✅'}")
-    print(f"  大logits: Inf检查={'❌' if torch.isinf(large_rewards).any() else '✅'}")
+    large_group_data = [{'logits': large_logits, 'ids': normal_ids, 'r_final': 0.0}]
+    large_returns, _ = calculate_hvr_rewards_for_group(large_group_data, 1.0, 0.1, 0.5)
+    print(f"  大logits: NaN检查={'❌' if any(np.isnan(large_returns)) else '✅'}")
+    print(f"  大logits: Inf检查={'❌' if any(np.isinf(large_returns)) else '✅'}")
 
 def visualize_hvr_comparison():
     """可视化HVR vs 标准方法对比"""
@@ -242,17 +214,18 @@ def visualize_hvr_comparison():
         
         plt.figure(figsize=(12, 8))
         
+        test_group_data = [{'logits': response_logits, 'ids': response_ids, 'r_final': 1.0}]
+
         for i, lambda_hvr in enumerate(lambdas):
-            hvr_rewards, _ = calculate_hvr_rewards(
-                response_logits, response_ids, 1.0,
-                alpha=1.0, beta=0.1, lambda_hvr=lambda_hvr
+            group_returns, _ = calculate_hvr_rewards_for_group(
+                test_group_data, alpha=1.0, beta=0.1, lambda_hvr=lambda_hvr
             )
-            
+
             plt.subplot(2, 3, i + 1)
-            plt.plot(hvr_rewards.numpy(), 'o-', linewidth=2)
+            plt.bar(0, group_returns[0])
             plt.title(f'λ = {lambda_hvr}')
-            plt.xlabel('Token位置')
-            plt.ylabel('HVR奖励')
+            plt.xlabel('序列')
+            plt.ylabel('组回报')
             plt.grid(True, alpha=0.3)
         
         plt.tight_layout()

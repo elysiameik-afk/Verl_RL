@@ -26,6 +26,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.n=8 \
+    actor_rollout_ref.rollout.save_logits=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     actor_rollout_ref.rollout.max_num_batched_tokens=16384 \
@@ -42,11 +43,10 @@ python3 -m verl.trainer.main_ppo \
     trainer.save_freq=4 \
     trainer.test_freq=1 \
     trainer.total_epochs=8 \
-    reward_model.reward_manager=logic_rl \
-    actor_rollout_ref.actor.use_hvr=True \
-    actor_rollout_ref.actor.hvr_alpha=1.0 \
-    actor_rollout_ref.actor.hvr_beta=0.1 \
-    actor_rollout_ref.actor.hvr_lambda=0.5
+    reward_model.reward_manager=hvr_logic_rl \
+    reward_model.hvr_alpha=1.0 \
+    reward_model.hvr_beta=0.1 \
+    reward_model.hvr_lambda=0.5
 
 echo "🎉 HVR-GRPO集成测试完成！"
 echo "📊 [HVR结果] 请查看WandB中的HVR专用指标："
