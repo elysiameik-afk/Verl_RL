@@ -19,5 +19,9 @@ from .naive import NaiveRewardManager
 from .prime import PrimeRewardManager
 from .logic_rl_reward import LogicRLRewardManager
 from .juben_reward import LLMQualityRewardManager
+
+# Import HVR Manager to ensure registration
+from .hvr_logic_rl_reward import HVRLogicRLRewardManager
+
 # Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
-__all__ = ["BatchRewardManager", "DAPORewardManager", "NaiveRewardManager", "PrimeRewardManager","LogicRLRewardManager","LLMQualityRewardManager" "register", "get_reward_manager_cls"]
+__all__ = ["BatchRewardManager", "DAPORewardManager", "NaiveRewardManager", "PrimeRewardManager","LogicRLRewardManager","LLMQualityRewardManager", "register", "get_reward_manager_cls"]
