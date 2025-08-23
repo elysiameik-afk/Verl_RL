@@ -44,9 +44,9 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=1 \
     trainer.total_epochs=8 \
     reward_model.reward_manager=hvr_logic_rl \
-    reward_model.hvr_alpha=1.0 \
-    reward_model.hvr_beta=0.1 \
-    reward_model.hvr_lambda=0.5
+    +reward_model.reward_kwargs.hvr_alpha=1.0 \
+    +reward_model.reward_kwargs.hvr_beta=0.1 \
+    +reward_model.reward_kwargs.hvr_lambda=0.5
 
 echo "🎉 HVR-GRPO集成测试完成！"
 echo "📊 [HVR结果] 请查看WandB中的HVR专用指标："
