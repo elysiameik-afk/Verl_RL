@@ -85,19 +85,19 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 if is_main_process():
                     print("🔍 [HVR Manager] 计算了新的奖励")
 
-            # 2. 检查是否有logits用于HVR计算
-            if "logits" in data.batch:
-                logits = data.batch["logits"]
+            # 2. 检查是否有rollout_log_probs用于HVR计算
+            if "rollout_log_probs" in data.batch:
+                rollout_log_probs = data.batch["rollout_log_probs"]
 
                 if is_main_process():
-                    print(f"🔍 [HVR Manager] 找到logits，形状: {logits.shape}")
+                    print(f"🔍 [HVR Manager] 找到rollout_log_probs，形状: {rollout_log_probs.shape}")
                     print("🎯 [HVR Manager] 开始HVR重塑")
 
-                # 3. 应用HVR重塑
-                hvr_reward_tensor, hvr_extra_info = self._apply_hvr_to_rewards(
+                # 3. 应用HVR重塑 (使用log_probs而不是logits)
+                hvr_reward_tensor, hvr_extra_info = self._apply_hvr_to_rewards_with_logprobs(
                     data=data,
                     base_reward_tensor=base_reward_tensor,
-                    logits=logits
+                    rollout_log_probs=rollout_log_probs
                 )
 
                 # 4. 合并额外信息
@@ -113,11 +113,11 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
 
             else:
                 if is_main_process():
-                    print("⚠️ [HVR Manager] 未找到logits，回退到原始LogicRL")
+                    print("⚠️ [HVR Manager] 未找到rollout_log_probs，回退到原始LogicRL")
 
                 # 回退到原始LogicRL
                 reward_extra_info["hvr_applied"] = False
-                reward_extra_info["hvr_fallback_reason"] = "no_logits"
+                reward_extra_info["hvr_fallback_reason"] = "no_rollout_log_probs"
 
                 if return_dict:
                     return {
@@ -213,6 +213,210 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             print(f"   HVR成功率: {aggregated_metrics.get('hvr/success_rate', 0):.2f}")
 
         return hvr_reward_tensor, hvr_extra_info
+
+    def _apply_hvr_to_rewards_with_logprobs(self, data, base_reward_tensor, rollout_log_probs):
+        """
+        使用rollout_log_probs应用HVR重塑 (适配vLLM rollout输出)
+
+        Args:
+            data: DataProto对象
+            base_reward_tensor: [batch_size, seq_len] 基础奖励张量
+            rollout_log_probs: [batch_size, seq_len] rollout的log概率
+
+        Returns:
+            tuple: (hvr_reward_tensor, hvr_extra_info)
+        """
+        # 1. 提取稀疏奖励
+        sparse_rewards = self._extract_sparse_rewards_from_tensor(base_reward_tensor)
+
+        if is_main_process():
+            print(f"🔍 [HVR Manager] 稀疏奖励分布: {dict(zip(*np.unique(sparse_rewards, return_counts=True)))}")
+
+        # 2. 准备组数据 (使用log_probs而不是logits)
+        group_data = self._prepare_group_data_with_logprobs(data, rollout_log_probs, sparse_rewards)
+
+        # 3. 计算HVR组回报 (使用简化的HVR算法)
+        group_returns, hvr_metrics = self._calculate_hvr_returns_from_logprobs(
+            group_data=group_data,
+            alpha=self.hvr_alpha,
+            beta=self.hvr_beta,
+            lambda_hvr=self.hvr_lambda
+        )
+
+        # 4. 计算GRPO组间优势
+        mean_return = sum(group_returns) / len(group_returns)
+        grpo_advantages = [ret - mean_return for ret in group_returns]
+
+        # 5. 创建HVR奖励张量
+        hvr_reward_tensor = torch.zeros_like(base_reward_tensor, dtype=torch.float32)
+
+        responses = data.batch["responses"]
+        attention_mask = data.batch["attention_mask"]
+
+        # 获取response部分的mask
+        response_length = responses.shape[1]
+        response_mask = attention_mask[:, -response_length:]
+
+        for i, seq_advantage in enumerate(grpo_advantages):
+            # 将序列级优势分配给所有有效token
+            valid_positions = torch.where(response_mask[i] > 0)[0]
+            if len(valid_positions) > 0:
+                hvr_reward_tensor[i, valid_positions] = seq_advantage
+
+        # 6. 聚合HVR指标
+        aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
+
+        # 7. 构建额外信息
+        hvr_extra_info = {
+            "hvr_applied": True,
+            "hvr_method": "logprobs_based",
+            "hvr_group_return_mean": mean_return,
+            "hvr_group_return_std": np.std(group_returns),
+            "hvr_grpo_advantage_mean": np.mean(grpo_advantages),
+            "hvr_grpo_advantage_std": np.std(grpo_advantages),
+            "hvr_sparse_rewards": sparse_rewards,
+            "hvr_alpha": self.hvr_alpha,
+            "hvr_beta": self.hvr_beta,
+            "hvr_lambda": self.hvr_lambda,
+        }
+
+        # 8. 添加HVR指标
+        hvr_extra_info.update(aggregated_metrics)
+
+        # 9. 记录指标历史
+        self.hvr_metrics_history.append(aggregated_metrics)
+
+        if is_main_process():
+            print(f"✅ [HVR Manager] HVR重塑完成 (基于log_probs)")
+            print(f"   组平均回报: {mean_return:.4f}")
+            print(f"   GRPO优势范围: [{min(grpo_advantages):.4f}, {max(grpo_advantages):.4f}]")
+            print(f"   HVR成功率: {aggregated_metrics.get('hvr/success_rate', 0):.2f}")
+
+        return hvr_reward_tensor, hvr_extra_info
+
+    def _prepare_group_data_with_logprobs(self, data, rollout_log_probs, sparse_rewards):
+        """使用log_probs准备HVR组数据"""
+        responses = data.batch["responses"]
+        attention_mask = data.batch["attention_mask"]
+
+        # 获取response部分的数据
+        response_length = responses.shape[1]
+        response_mask = attention_mask[:, -response_length:]
+        response_log_probs = rollout_log_probs  # [batch_size, response_len]
+
+        group_data = []
+
+        for i in range(len(sparse_rewards)):
+            # 获取有效位置
+            valid_positions = torch.where(response_mask[i] > 0)[0]
+            if len(valid_positions) == 0:
+                if is_main_process():
+                    print(f"⚠️ [HVR Manager] 序列{i}没有有效token，跳过")
+                continue
+
+            # 提取有效的log_probs和token IDs
+            valid_log_probs = response_log_probs[i, valid_positions]  # [valid_len]
+            valid_ids = responses[i, valid_positions]  # [valid_len]
+            r_final = sparse_rewards[i]
+
+            group_data.append({
+                'log_probs': valid_log_probs,
+                'ids': valid_ids,
+                'r_final': r_final
+            })
+
+            if is_main_process() and i == 0:
+                print(f"🔍 [HVR Manager] 序列{i}: 有效长度={len(valid_positions)}, R_final={r_final}")
+
+        return group_data
+
+    def _calculate_hvr_returns_from_logprobs(self, group_data, alpha, beta, lambda_hvr):
+        """
+        基于log_probs计算HVR回报 (简化版本)
+
+        由于没有原始logits，我们使用简化的HVR算法：
+        1. 使用log_probs作为价值的代理
+        2. 应用价值重塑
+        3. 计算总回报
+        """
+        group_returns = []
+        hvr_metrics = {
+            'log_prob_values': [],
+            'hvr_rewards': [],
+            'r_finals': [],
+            'v_targets': [],
+            'sequence_lengths': [],
+            'successful_count': 0,
+            'total_count': len(group_data)
+        }
+
+        if is_main_process():
+            print(f"🎯 [HVR Manager] 处理组数据: {len(group_data)} 个序列 (基于log_probs)")
+
+        for seq_idx, d in enumerate(group_data):
+            try:
+                # 提取数据
+                log_probs = d['log_probs']  # [sequence_length]
+                ids = d['ids']              # [sequence_length]
+                r_final = d['r_final']      # scalar
+
+                sequence_length = log_probs.shape[0]
+
+                if is_main_process() and seq_idx == 0:
+                    print(f"🔍 [HVR Manager] 序列{seq_idx}: 长度={sequence_length}, R_final={r_final}")
+
+                # 简化的HVR计算：使用log_probs作为价值代理
+                # V_proxy(t) = alpha * log_prob(t) (简化的内生价值)
+                v_proxy_list = [alpha * lp.item() for lp in log_probs]
+                v_proxy_list.append(0.0)  # 终止状态
+
+                # 价值重塑
+                V_max = max(v_proxy_list[:-1])
+                V_min = min(v_proxy_list[:-1])
+
+                p = (r_final + 3.0) / 6.0
+                p = max(0.0, min(1.0, p))
+                V_target = (1.0 - p) * V_min + p * V_max
+
+                # 重塑后价值
+                V_hvr_list = [(1.0 - lambda_hvr) * v + lambda_hvr * V_target for v in v_proxy_list]
+
+                # 计算稠密奖励
+                r_hvr_list = []
+                for t in range(sequence_length):
+                    # 简化的HVR奖励：r_hvr_t = alpha * log_prob_t + V_hvr[t] - V_hvr[t+1]
+                    r_hvr_t = alpha * log_probs[t].item() + V_hvr_list[t] - V_hvr_list[t + 1]
+                    r_hvr_list.append(r_hvr_t)
+
+                # 添加最终奖励
+                r_hvr_list[-1] += r_final
+
+                # 计算总回报
+                total_return = sum(r_hvr_list)
+                group_returns.append(total_return)
+
+                # 收集指标
+                hvr_metrics['log_prob_values'].extend([lp.item() for lp in log_probs])
+                hvr_metrics['hvr_rewards'].extend(r_hvr_list)
+                hvr_metrics['r_finals'].append(r_final)
+                hvr_metrics['v_targets'].append(V_target)
+                hvr_metrics['sequence_lengths'].append(sequence_length)
+                hvr_metrics['successful_count'] += 1
+
+                if is_main_process() and seq_idx == 0:
+                    print(f"✅ [HVR Manager] 序列{seq_idx}: 总回报={total_return:.4f}, V_target={V_target:.4f}")
+                    print(f"   HVR奖励范围: [{min(r_hvr_list):.4f}, {max(r_hvr_list):.4f}]")
+
+            except Exception as e:
+                if is_main_process():
+                    print(f"❌ [HVR Manager] 序列{seq_idx}处理失败: {e}")
+                group_returns.append(0.0)
+
+        if is_main_process():
+            success_rate = hvr_metrics['successful_count'] / hvr_metrics['total_count']
+            print(f"🎯 [HVR Manager] 组处理完成: 成功率={success_rate:.2f}, 平均回报={np.mean(group_returns):.4f}")
+
+        return group_returns, hvr_metrics
 
     def _extract_sparse_rewards_from_tensor(self, reward_tensor):
         """从奖励张量中提取稀疏奖励"""
