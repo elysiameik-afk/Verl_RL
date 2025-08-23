@@ -20,7 +20,7 @@ def test_hvr_manager():
     print("🎯 测试HVR Manager\n")
 
     try:
-        from verl.trainer.ppo.reward_manager.hvr_logic_rl_reward import HVRLogicRLRewardManager
+        from verl.workers.reward_manager.hvr_logic_rl_reward import HVRLogicRLRewardManager
 
         # 创建HVR Manager
         manager = HVRLogicRLRewardManager(
