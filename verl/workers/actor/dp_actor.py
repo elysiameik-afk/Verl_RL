@@ -475,15 +475,15 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # 🔍 调试：检查data中的可用字段
                     if self.use_hvr and is_main_process():
-                        print(f"🔍 [HVR调试] data.batch字段: {list(data.batch.keys())}")
-                        print(f"🔍 [HVR调试] data.non_tensor_batch字段: {list(data.non_tensor_batch.keys()) if hasattr(data, 'non_tensor_batch') else 'None'}")
+                        print(f"🔍 [HVR调试] data类型: {type(data)}")
+                        print(f"🔍 [HVR调试] data字段: {list(data.keys())}")
 
                         # 检查可能包含原始奖励的字段
                         reward_fields = ["token_level_rewards", "token_level_scores", "rewards", "rm_scores"]
                         for field in reward_fields:
-                            if field in data.batch:
+                            if field in data:
                                 print(f"🔍 [HVR调试] 找到奖励字段: {field}")
-                                sample_rewards = data.batch[field][0]  # 第一个序列
+                                sample_rewards = data[field][0]  # 第一个序列
                                 print(f"🔍 [HVR调试] {field}形状: {sample_rewards.shape}")
                                 print(f"🔍 [HVR调试] {field}非零值: {sample_rewards[sample_rewards != 0].tolist()}")
 
@@ -741,8 +741,11 @@ class DataParallelPPOActor(BasePPOActor):
         reward_fields = ["token_level_rewards", "token_level_scores", "rewards"]
 
         for field in reward_fields:
-            if hasattr(data, 'batch') and field in data.batch:
-                reward_tensor = data.batch[field]  # [batch_size, seq_len]
+            if field in data:
+                reward_tensor = data[field]  # [batch_size, seq_len]
+
+                if is_main_process():
+                    print(f"🔍 [HVR] 找到奖励字段: {field}, 形状: {reward_tensor.shape}")
 
                 # 提取每个序列最后一个非零位置的奖励
                 r_finals = []
@@ -753,9 +756,15 @@ class DataParallelPPOActor(BasePPOActor):
                         last_reward_pos = nonzero_indices[-1]
                         r_final = reward_tensor[i, last_reward_pos].item()
                         r_finals.append(r_final)
+
+                        if is_main_process() and i == 0:
+                            print(f"🔍 [HVR] 序列{i}: 非零位置={nonzero_indices.tolist()}, R_final={r_final}")
                     else:
                         # 如果没有非零奖励，使用0
                         r_finals.append(0.0)
+
+                if is_main_process():
+                    print(f"🔍 [HVR] 提取的R_final: {r_finals}")
 
                 return r_finals
 
@@ -763,6 +772,7 @@ class DataParallelPPOActor(BasePPOActor):
         batch_size = data["responses"].shape[0] if "responses" in data else 1
         if is_main_process():
             print("⚠️ [HVR] 未找到稀疏奖励字段，使用零奖励")
+            print(f"   可用字段: {list(data.keys())}")
         return [0.0] * batch_size
 
     def _prepare_group_data_for_hvr(self, response_logits, responses, response_mask, r_finals):
