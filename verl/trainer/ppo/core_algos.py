@@ -1842,3 +1842,215 @@ def compute_pf_ppo_reweight_data(
     resampled_data.meta_info = resampled_meta_info
 
     return resampled_data
+
+
+# ============================================================================
+# HVR (Hindsight Value Reshaping) 核心实现
+# 基于ERVF价值函数和后见之明价值重塑的内生奖励机制
+# ============================================================================
+
+def calculate_ervf_value(logits: torch.Tensor, alpha: float, beta: float) -> float:
+    """
+    计算熵正则化价值函数 (ERVF)
+
+    基于EndoRM思想，但加入熵惩罚来减少决策不确定性
+
+    Args:
+        logits: [vocab_size] - 模型在当前状态的logits输出
+        alpha: float - 温度系数 α
+        beta: float - 熵惩罚权重 β
+
+    Returns:
+        float: 熵正则化价值 V_ervf
+    """
+    # 1. 计算LSE价值 V_endo (EndoRM基础价值)
+    V_endo = alpha * torch.logsumexp(logits / alpha, dim=-1)
+
+    # 2. 计算策略熵 H (数值稳定版本)
+    probs = torch.nn.functional.softmax(logits, dim=-1)
+    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+    H = -torch.sum(probs * log_probs, dim=-1)
+
+    # 3. 计算最终的熵正则化价值
+    V_ervf = V_endo - beta * H
+
+    return V_ervf.item()
+
+
+def calculate_hvr_rewards_for_group(
+    group_data: list,
+    alpha: float,
+    beta: float,
+    lambda_hvr: float
+) -> tuple:
+    """
+    为整个组计算HVR奖励和总回报
+
+    Args:
+        group_data: 组数据列表，每个元素包含 'logits', 'ids', 'r_final'
+        alpha: 温度系数
+        beta: 熵惩罚权重
+        lambda_hvr: HVR混合因子
+
+    Returns:
+        tuple: (group_returns, hvr_metrics_dict)
+    """
+    group_returns = []
+    hvr_metrics = {
+        'ervf_values': [],
+        'entropies': [],
+        'hvr_rewards': [],
+        'r_finals': [],
+        'v_targets': [],
+        'sequence_lengths': [],
+        'successful_count': 0,
+        'total_count': len(group_data)
+    }
+
+    if is_main_process():
+        print(f"🎯 [HVR] 处理组数据: {len(group_data)} 个序列")
+
+    for seq_idx, d in enumerate(group_data):
+        try:
+            # 提取数据
+            logits = d['logits']  # [sequence_length, vocab_size]
+            ids = d['ids']        # [sequence_length]
+            r_final = d['r_final']  # scalar
+
+            sequence_length = logits.shape[0]
+
+            if is_main_process() and seq_idx == 0:
+                print(f"🔍 [HVR] 序列{seq_idx}: 长度={sequence_length}, R_final={r_final}")
+
+            # a. 计算价值轨迹 V_ervf_list
+            V_ervf_list = []
+            entropy_list = []
+
+            for t in range(sequence_length):
+                logits_t = logits[t]  # [vocab_size]
+
+                # 计算ERVF价值
+                v_ervf = calculate_ervf_value(logits_t, alpha, beta)
+                V_ervf_list.append(v_ervf)
+
+                # 同时记录熵用于指标
+                probs = torch.nn.functional.softmax(logits_t, dim=-1)
+                log_probs = torch.nn.functional.log_softmax(logits_t, dim=-1)
+                entropy = -torch.sum(probs * log_probs, dim=-1).item()
+                entropy_list.append(entropy)
+
+            # 添加终止状态价值
+            V_ervf_list.append(0.0)
+
+            # b. 计算重塑目标 V_target
+            V_max = max(V_ervf_list[:-1])  # 排除终止状态
+            V_min = min(V_ervf_list[:-1])
+
+            # 将R_final归一化到[0,1] (适应logic_rl的奖励范围[-3,3])
+            p = (r_final + 3.0) / 6.0
+            p = max(0.0, min(1.0, p))  # 确保在[0,1]范围内
+            V_target = (1.0 - p) * V_min + p * V_max
+
+            # c. 计算重塑后的价值轨迹 V_hvr_list
+            V_hvr_list = [(1.0 - lambda_hvr) * v + lambda_hvr * V_target for v in V_ervf_list]
+
+            # d. 计算稠密奖励 r_hvr_list
+            r_hvr_list = []
+
+            for t in range(sequence_length):
+                # 获取当前步的log概率
+                logits_t = logits[t]  # [vocab_size]
+                token_id_t = ids[t].item()
+
+                # 使用数值稳定的log_softmax
+                log_probs_t = torch.nn.functional.log_softmax(logits_t, dim=-1)
+                log_prob_t = log_probs_t[token_id_t].item()
+
+                # HVR奖励公式: r_hvr_t = α * log_prob_t + V_hvr[t] - V_hvr[t+1]
+                r_hvr_t = alpha * log_prob_t + V_hvr_list[t] - V_hvr_list[t + 1]
+                r_hvr_list.append(r_hvr_t)
+
+            # 重要: 将最终奖励加到最后一步
+            r_hvr_list[-1] = r_hvr_list[-1] + r_final
+
+            # e. 计算总回报
+            total_return = sum(r_hvr_list)
+            group_returns.append(total_return)
+
+            # 收集指标
+            hvr_metrics['ervf_values'].extend(V_ervf_list[:-1])  # 排除终止状态
+            hvr_metrics['entropies'].extend(entropy_list)
+            hvr_metrics['hvr_rewards'].extend(r_hvr_list)
+            hvr_metrics['r_finals'].append(r_final)
+            hvr_metrics['v_targets'].append(V_target)
+            hvr_metrics['sequence_lengths'].append(sequence_length)
+            hvr_metrics['successful_count'] += 1
+
+            if is_main_process() and seq_idx == 0:
+                print(f"✅ [HVR] 序列{seq_idx}: 总回报={total_return:.4f}, V_target={V_target:.4f}")
+                print(f"   HVR奖励范围: [{min(r_hvr_list):.4f}, {max(r_hvr_list):.4f}]")
+
+        except Exception as e:
+            if is_main_process():
+                print(f"❌ [HVR] 序列{seq_idx}处理失败: {e}")
+            # 使用零回报作为fallback
+            group_returns.append(0.0)
+
+    if is_main_process():
+        success_rate = hvr_metrics['successful_count'] / hvr_metrics['total_count']
+        print(f"🎯 [HVR] 组处理完成: 成功率={success_rate:.2f}, 平均回报={np.mean(group_returns):.4f}")
+
+    return group_returns, hvr_metrics
+
+
+def aggregate_hvr_metrics_dict(hvr_metrics: dict) -> dict:
+    """聚合HVR指标字典"""
+    if not hvr_metrics or hvr_metrics['successful_count'] == 0:
+        return {}
+
+    aggregated = {}
+
+    # ERVF和熵指标
+    if hvr_metrics['ervf_values']:
+        aggregated['hvr/ervf_value_mean'] = np.mean(hvr_metrics['ervf_values'])
+        aggregated['hvr/ervf_value_std'] = np.std(hvr_metrics['ervf_values'])
+        aggregated['hvr/ervf_value_min'] = np.min(hvr_metrics['ervf_values'])
+        aggregated['hvr/ervf_value_max'] = np.max(hvr_metrics['ervf_values'])
+
+    if hvr_metrics['entropies']:
+        aggregated['hvr/entropy_mean'] = np.mean(hvr_metrics['entropies'])
+        aggregated['hvr/entropy_std'] = np.std(hvr_metrics['entropies'])
+
+    # HVR奖励指标
+    if hvr_metrics['hvr_rewards']:
+        aggregated['hvr/reward_mean'] = np.mean(hvr_metrics['hvr_rewards'])
+        aggregated['hvr/reward_std'] = np.std(hvr_metrics['hvr_rewards'])
+        aggregated['hvr/reward_min'] = np.min(hvr_metrics['hvr_rewards'])
+        aggregated['hvr/reward_max'] = np.max(hvr_metrics['hvr_rewards'])
+
+    # 稀疏奖励分布
+    if hvr_metrics['r_finals']:
+        aggregated['hvr/r_final_mean'] = np.mean(hvr_metrics['r_finals'])
+        aggregated['hvr/r_final_std'] = np.std(hvr_metrics['r_finals'])
+
+        # 奖励分布统计
+        unique_rewards, counts = np.unique(hvr_metrics['r_finals'], return_counts=True)
+        for reward, count in zip(unique_rewards, counts):
+            aggregated[f'hvr/r_final_dist_{reward}'] = count
+
+    # 价值重塑指标
+    if hvr_metrics['v_targets']:
+        aggregated['hvr/v_target_mean'] = np.mean(hvr_metrics['v_targets'])
+        aggregated['hvr/v_target_std'] = np.std(hvr_metrics['v_targets'])
+
+    # 序列长度统计
+    if hvr_metrics['sequence_lengths']:
+        aggregated['hvr/seq_length_mean'] = np.mean(hvr_metrics['sequence_lengths'])
+        aggregated['hvr/seq_length_std'] = np.std(hvr_metrics['sequence_lengths'])
+
+    # 成功率指标
+    aggregated['hvr/success_rate'] = hvr_metrics['successful_count'] / hvr_metrics['total_count']
+    aggregated['hvr/successful_count'] = hvr_metrics['successful_count']
+    aggregated['hvr/total_count'] = hvr_metrics['total_count']
+
+    return aggregated

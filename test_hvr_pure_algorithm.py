@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-测试HVR纯净算法实现
+测试HVR在GRPO框架中的集成实现
 
-验证ERVF价值函数和HVR奖励重塑的数学正确性
+验证ERVF价值函数和HVR奖励重塑在GRPO中的正确性
 """
 
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from verl.trainer.hvr.hvr_core_algos import (
+from verl.trainer.ppo.core_algos import (
     calculate_ervf_value,
-    calculate_hvr_rewards,
-    hvr_policy_loss,
-    aggregate_hvr_metrics
+    calculate_hvr_rewards_for_group,
+    aggregate_hvr_metrics_dict
 )
 
 def test_ervf_value_function():
@@ -46,39 +45,62 @@ def test_ervf_value_function():
         print(f"  验证: {'✅' if abs(v_ervf - expected_v_ervf) < 1e-6 else '❌'}")
         print()
 
-def test_hvr_rewards_with_logic_rl():
-    """测试HVR奖励计算 (模拟logic_rl奖励)"""
-    print("🎯 测试HVR奖励计算 (logic_rl兼容)\n")
-    
-    # 创建测试数据
-    seq_len = 8
-    vocab_size = 100
-    
-    # 随机logits和token序列
-    response_logits = torch.randn(seq_len, vocab_size)
-    response_ids = torch.randint(0, vocab_size, (seq_len,))
-    
+def test_hvr_group_processing():
+    """测试HVR组处理 (GRPO集成版本)"""
+    print("🎯 测试HVR组处理 (GRPO集成版本)\n")
+
+    # 创建组数据 (模拟GRPO的一个组)
+    group_size = 4
+    group_data = []
+
     # 测试logic_rl的典型奖励值
-    logic_rl_rewards = [-3, -1, 0, 1, 3]
-    
-    for r_final in logic_rl_rewards:
-        print(f"📊 Logic RL奖励: R_final = {r_final}")
-        
-        hvr_rewards, metrics = calculate_hvr_rewards(
-            response_logits=response_logits,
-            response_ids=response_ids,
-            R_final=r_final,
-            alpha=1.0,
-            beta=0.1,
-            lambda_hvr=0.5,
-        )
-        
-        print(f"  HVR奖励序列: {hvr_rewards.tolist()}")
-        print(f"  奖励总和: {hvr_rewards.sum().item():.4f}")
-        print(f"  最后奖励: {hvr_rewards[-1].item():.4f}")
-        print(f"  ERVF均值: {metrics.ervf_value_mean:.4f}")
-        print(f"  熵均值: {metrics.entropy_mean:.4f}")
-        print()
+    logic_rl_rewards = [-3, -1, 1, 3]
+
+    for i in range(group_size):
+        seq_len = np.random.randint(8, 16)  # 随机序列长度
+        vocab_size = 1000
+
+        # 创建单个序列数据
+        logits = torch.randn(seq_len, vocab_size)
+        ids = torch.randint(0, vocab_size, (seq_len,))
+        r_final = logic_rl_rewards[i]  # 使用不同的奖励
+
+        group_data.append({
+            'logits': logits,
+            'ids': ids,
+            'r_final': r_final
+        })
+
+    print(f"📊 组数据: {group_size} 个序列")
+    print(f"   稀疏奖励: {[d['r_final'] for d in group_data]}")
+
+    # 计算HVR组回报
+    group_returns, hvr_metrics = calculate_hvr_rewards_for_group(
+        group_data=group_data,
+        alpha=1.0,
+        beta=0.1,
+        lambda_hvr=0.5
+    )
+
+    # 计算GRPO优势
+    mean_return = sum(group_returns) / len(group_returns)
+    grpo_advantages = [ret - mean_return for ret in group_returns]
+
+    print(f"\n✅ HVR组处理结果:")
+    print(f"   组回报: {[f'{ret:.4f}' for ret in group_returns]}")
+    print(f"   平均回报: {mean_return:.4f}")
+    print(f"   GRPO优势: {[f'{adv:.4f}' for adv in grpo_advantages]}")
+
+    # 聚合指标
+    aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
+    print(f"\n📊 HVR指标:")
+    for key, value in aggregated_metrics.items():
+        if isinstance(value, (int, float)):
+            print(f"   {key}: {value:.4f}")
+        else:
+            print(f"   {key}: {value}")
+
+    print()
 
 def test_hvr_parameter_sensitivity():
     """测试HVR参数敏感性"""
@@ -244,19 +266,18 @@ if __name__ == "__main__":
     print("🚀 开始测试HVR纯净算法实现\n")
     
     test_ervf_value_function()
-    test_hvr_rewards_with_logic_rl()
+    test_hvr_group_processing()
     test_hvr_parameter_sensitivity()
-    test_hvr_policy_loss()
-    test_metrics_aggregation()
     test_edge_cases()
     visualize_hvr_comparison()
     
-    print("🎉 HVR纯净算法测试完成！")
-    print("\n📋 HVR算法特性总结:")
+    print("🎉 HVR-GRPO集成算法测试完成！")
+    print("\n📋 HVR在GRPO框架中的特性总结:")
     print("  ✅ ERVF价值函数: 基于logits的内生价值 + 熵正则化")
     print("  ✅ HVR奖励重塑: 稀疏奖励指导的价值轨迹重塑")
+    print("  ✅ GRPO组间投票: 保留组内相对优势计算")
     print("  ✅ 无需critic: 完全基于模型自身的内生价值估计")
     print("  ✅ Logic RL兼容: 支持{-3,-1,0,1,3}等稀疏奖励")
     print("  ✅ 参数可控: α控制温度，β控制熵惩罚，λ控制重塑强度")
     print("  ✅ 数值稳定: 使用log_softmax等稳定计算")
-    print("\n🎯 HVR纯净内生奖励系统已准备就绪！")
+    print("\n🎯 HVR-GRPO集成内生奖励系统已准备就绪！")

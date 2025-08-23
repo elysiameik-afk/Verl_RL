@@ -21,6 +21,7 @@ import itertools
 import logging
 import os
 from typing import Tuple
+import numpy as np
 
 import torch
 from torch import nn
@@ -498,7 +499,7 @@ class DataParallelPPOActor(BasePPOActor):
                     if entropy_coeff != 0:
                         calculate_entropy = True
 
-                    # 🆕 创新点2.6: HVR内生奖励机制
+                    # 🆕 创新点2.7: HVR内生奖励机制 (新版本)
                     if self.use_hvr:
                         # 使用扩展版本获取logits
                         entropy, log_prob, response_logits = self._forward_micro_batch_with_logits(
@@ -506,29 +507,21 @@ class DataParallelPPOActor(BasePPOActor):
                         )
 
                         if response_logits is not None:
-                            # 立即处理HVR并释放logits显存
+                            # 应用HVR奖励重塑
                             with torch.no_grad():  # HVR计算不需要梯度
-                                from verl.trainer.ppo.core_algos import apply_hvr_integration
-                                enhanced_advantages, hvr_metrics = apply_hvr_integration(
+                                advantages = self._apply_hvr_reward_reshaping(
+                                    data=data,
                                     advantages=advantages,
                                     response_logits=response_logits,
-                                    response_ids=responses,
+                                    responses=responses,
                                     response_mask=response_mask,
-                                    alpha=self.hvr_alpha,
-                                    beta=self.hvr_beta,
-                                    lambda_hvr=self.hvr_lambda,
+                                    metrics=metrics,
                                 )
+
                             # 立即释放logits显存 (保守优化)
                             del response_logits
                             if torch.cuda.is_available():
                                 torch.cuda.empty_cache()
-
-                            advantages = enhanced_advantages
-                            metrics.update(hvr_metrics)
-
-                            if is_main_process():
-                                print(f"🎯 [创新点2.6-HVR] 应用内生奖励, α={self.hvr_alpha}, β={self.hvr_beta}, λ={self.hvr_lambda}")
-                                print(f"🎯 [HVR详情] 成功率={hvr_metrics.get('hvr/success_rate', 0):.2f}, R_final均值={hvr_metrics.get('hvr/r_final_mean', 0):.3f}")
                         else:
                             if is_main_process():
                                 print("⚠️ [HVR] 无法获取logits，跳过HVR处理")
@@ -649,3 +642,148 @@ class DataParallelPPOActor(BasePPOActor):
                 append_to_dict(metrics, data)
         self.actor_optimizer.zero_grad()
         return metrics
+
+    def _apply_hvr_reward_reshaping(
+        self,
+        data,
+        advantages,
+        response_logits,
+        responses,
+        response_mask,
+        metrics
+    ):
+        """
+        应用HVR (Hindsight Value Reshaping) 奖励重塑
+
+        这是HVR在GRPO框架中的集成点，替代原始的奖励计算
+        """
+        from verl.trainer.ppo.core_algos import (
+            calculate_hvr_rewards_for_group,
+            aggregate_hvr_metrics_dict,
+            is_main_process
+        )
+
+        if is_main_process():
+            print(f"🎯 [HVR] 开始奖励重塑, α={self.hvr_alpha}, β={self.hvr_beta}, λ={self.hvr_lambda}")
+
+        try:
+            # 1. 提取稀疏奖励R_final (来自logic_rl的compute_score)
+            r_finals = self._extract_sparse_rewards_from_data(data)
+
+            # 2. 准备组数据
+            group_data = self._prepare_group_data_for_hvr(
+                response_logits=response_logits,
+                responses=responses,
+                response_mask=response_mask,
+                r_finals=r_finals
+            )
+
+            # 3. 计算HVR总回报
+            group_returns, hvr_metrics = calculate_hvr_rewards_for_group(
+                group_data=group_data,
+                alpha=self.hvr_alpha,
+                beta=self.hvr_beta,
+                lambda_hvr=self.hvr_lambda
+            )
+
+            # 4. 计算GRPO组内优势 (保持GRPO的核心逻辑)
+            mean_return = sum(group_returns) / len(group_returns)
+            grpo_advantages = [ret - mean_return for ret in group_returns]
+
+            # 5. 将序列级优势扩展到token级
+            new_advantages = torch.zeros_like(advantages)
+            for i, seq_advantage in enumerate(grpo_advantages):
+                # 将序列级优势分配给所有有效token
+                valid_positions = torch.where(response_mask[i] > 0)[0]
+                if len(valid_positions) > 0:
+                    new_advantages[i, valid_positions] = seq_advantage
+
+            # 6. 聚合并记录HVR指标
+            hvr_aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
+            metrics.update(hvr_aggregated_metrics)
+
+            # 7. 添加GRPO相关指标
+            metrics.update({
+                'hvr/group_return_mean': mean_return,
+                'hvr/group_return_std': np.std(group_returns),
+                'hvr/grpo_advantage_mean': np.mean(grpo_advantages),
+                'hvr/grpo_advantage_std': np.std(grpo_advantages),
+                'hvr/alpha': self.hvr_alpha,
+                'hvr/beta': self.hvr_beta,
+                'hvr/lambda': self.hvr_lambda,
+            })
+
+            if is_main_process():
+                print(f"✅ [HVR] 奖励重塑完成")
+                print(f"   组平均回报: {mean_return:.4f}")
+                print(f"   GRPO优势范围: [{min(grpo_advantages):.4f}, {max(grpo_advantages):.4f}]")
+                print(f"   稀疏奖励分布: {dict(zip(*np.unique(r_finals, return_counts=True)))}")
+                print(f"   HVR成功率: {hvr_aggregated_metrics.get('hvr/success_rate', 0):.2f}")
+
+            return new_advantages
+
+        except Exception as e:
+            if is_main_process():
+                print(f"❌ [HVR] 奖励重塑失败: {e}")
+                print("   回退到原始advantages")
+
+            # 记录失败指标
+            metrics.update({
+                'hvr/success_rate': 0.0,
+                'hvr/error': str(e),
+            })
+
+            return advantages  # 回退到原始advantages
+
+    def _extract_sparse_rewards_from_data(self, data):
+        """从数据中提取稀疏奖励R_final (来自logic_rl的compute_score)"""
+        # 尝试从不同字段获取原始奖励
+        reward_fields = ["token_level_rewards", "token_level_scores", "rewards"]
+
+        for field in reward_fields:
+            if hasattr(data, 'batch') and field in data.batch:
+                reward_tensor = data.batch[field]  # [batch_size, seq_len]
+
+                # 提取每个序列最后一个非零位置的奖励
+                r_finals = []
+                for i in range(reward_tensor.shape[0]):
+                    nonzero_indices = torch.nonzero(reward_tensor[i]).flatten()
+                    if len(nonzero_indices) > 0:
+                        # 取最后一个非零位置的奖励作为R_final
+                        last_reward_pos = nonzero_indices[-1]
+                        r_final = reward_tensor[i, last_reward_pos].item()
+                        r_finals.append(r_final)
+                    else:
+                        # 如果没有非零奖励，使用0
+                        r_finals.append(0.0)
+
+                return r_finals
+
+        # 如果找不到奖励字段，返回零奖励
+        batch_size = data["responses"].shape[0] if "responses" in data else 1
+        if is_main_process():
+            print("⚠️ [HVR] 未找到稀疏奖励字段，使用零奖励")
+        return [0.0] * batch_size
+
+    def _prepare_group_data_for_hvr(self, response_logits, responses, response_mask, r_finals):
+        """为HVR准备组数据"""
+        group_data = []
+
+        for i in range(response_logits.shape[0]):
+            # 获取有效位置
+            valid_positions = torch.where(response_mask[i] > 0)[0]
+            if len(valid_positions) == 0:
+                continue
+
+            # 提取有效的logits和token IDs
+            valid_logits = response_logits[i, valid_positions]  # [valid_len, vocab_size]
+            valid_ids = responses[i, valid_positions]  # [valid_len]
+            r_final = r_finals[i]
+
+            group_data.append({
+                'logits': valid_logits,
+                'ids': valid_ids,
+                'r_final': r_final
+            })
+
+        return group_data
