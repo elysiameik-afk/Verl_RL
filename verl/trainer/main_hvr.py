@@ -8,7 +8,9 @@ HVR训练主程序
 python -m verl.trainer.main_hvr --config-path=... --config-name=...
 """
 
-import hydra
+import os
+import sys
+import yaml
 import ray
 from omegaconf import DictConfig, OmegaConf
 
@@ -105,16 +107,40 @@ def _validate_hvr_config(config: DictConfig):
         print(f"    奖励管理器: {reward_manager}")
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="hvr_trainer")
-def main(config: DictConfig):
+def load_hvr_config():
+    """加载HVR配置文件"""
+    # 获取配置文件路径
+    config_dir = os.path.join(os.path.dirname(__file__), "config")
+    config_path = os.path.join(config_dir, "hvr_trainer.yaml")
+
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"HVR配置文件未找到: {config_path}")
+
+    # 加载YAML配置
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config_dict = yaml.safe_load(f)
+
+    # 转换为OmegaConf
+    config = OmegaConf.create(config_dict)
+    return config
+
+
+def main():
     """HVR训练主函数"""
     if is_main_process():
         print("🚀 [HVR] 启动HVR内生奖励训练系统")
-        print("📋 [HVR] 配置概览:")
-        print(OmegaConf.to_yaml(config))
-    
+
     try:
+        # 加载配置
+        config = load_hvr_config()
+
+        if is_main_process():
+            print("📋 [HVR] 配置概览:")
+            print(OmegaConf.to_yaml(config))
+
+        # 运行HVR训练
         run_hvr(config)
+
     except Exception as e:
         if is_main_process():
             print(f"❌ [HVR] 训练失败: {e}")

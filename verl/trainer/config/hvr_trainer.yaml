@@ -1,12 +1,8 @@
 # HVR (Hindsight Value Reshaping) 内生奖励训练配置
 # 基于EndoRM思想的内生奖励机制，使用模型自身logits计算价值函数
 
-defaults:
-  - _self_
-  - data: sft_data
-  - model: qwen2_5_0_5b
-  - reward_model: logic_rl_reward
-  - algorithm: grpo  # 基础算法框架，但会被HVR替代
+# HVR (Hindsight Value Reshaping) 内生奖励训练配置
+# 完全独立的配置文件，不依赖其他配置
 
 # 训练器配置
 trainer:
