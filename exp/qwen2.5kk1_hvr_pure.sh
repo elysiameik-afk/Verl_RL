@@ -30,6 +30,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     actor_rollout_ref.rollout.max_num_batched_tokens=16384 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    algorithm.adv_estimator=grpo \
     algorithm.kl_ctrl.kl_coef=0.05 \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
