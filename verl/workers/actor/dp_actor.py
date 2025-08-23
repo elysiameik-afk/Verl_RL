@@ -472,6 +472,14 @@ class DataParallelPPOActor(BasePPOActor):
                     old_log_prob = data["old_log_probs"]
                     advantages = data["advantages"]
 
+                    # 🔍 调试：检查data中的可用字段
+                    if self.use_hvr and is_main_process():
+                        print(f"🔍 [HVR调试] data字段: {list(data.keys())}")
+                        if "rewards" in data:
+                            print(f"🔍 [HVR调试] 找到rewards字段")
+                        if "values" in data:
+                            print(f"🔍 [HVR调试] 找到values字段")
+
                     clip_ratio = self.config.clip_ratio
                     clip_ratio_low = self.config.clip_ratio_low if self.config.clip_ratio_low is not None else clip_ratio
                     clip_ratio_high = self.config.clip_ratio_high if self.config.clip_ratio_high is not None else clip_ratio

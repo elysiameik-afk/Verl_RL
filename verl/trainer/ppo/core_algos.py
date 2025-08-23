@@ -1195,6 +1195,13 @@ def apply_hvr_integration(
         r_final = advantages[i, last_valid_pos].item()
         r_final_values.append(r_final)
 
+        # 调试：打印R_final提取信息
+        if i == 0 and is_main_process():  # 只打印第一个序列的调试信息
+            print(f"🔍 [HVR调试] 序列{i}: 有效长度={len(valid_positions)}, 最后位置={last_valid_pos}")
+            print(f"🔍 [HVR调试] advantages[{i}, {last_valid_pos}] = {r_final}")
+            print(f"🔍 [HVR调试] advantages[{i}, :5] = {advantages[i, :5].tolist()}")  # 前5个
+            print(f"🔍 [HVR调试] advantages[{i}, -5:] = {advantages[i, -5:].tolist()}")  # 后5个
+
         # 获取有效部分的logits和token_ids
         valid_logits = response_logits[i, valid_positions]  # [valid_len, vocab_size]
         valid_ids = response_ids[i, valid_positions]  # [valid_len]
