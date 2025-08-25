@@ -157,12 +157,32 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         2. 可能缺少某些训练时的字段
         3. 数据结构可能略有不同
         """
-        # 简单的启发式检测：如果没有rollout_log_probs，很可能是验证阶段
-        if "rollout_log_probs" not in data.batch:
+        batch_size = 0
+        if "responses" in data.batch:
+            batch_size = data.batch["responses"].shape[0]
+
+        has_rollout_log_probs = "rollout_log_probs" in data.batch
+
+        if is_main_process():
+            print(f"🔍 [HVR Manager] 验证检测: batch_size={batch_size}, has_rollout_log_probs={has_rollout_log_probs}")
+
+        # 更严格的验证检测：
+        # 1. 如果没有rollout_log_probs，很可能是验证阶段
+        if not has_rollout_log_probs:
+            if is_main_process():
+                print("🔍 [HVR Manager] 检测原因: 缺少rollout_log_probs")
             return True
 
-        # 如果batch size很小（<= 4），可能是验证阶段
-        if "responses" in data.batch and data.batch["responses"].shape[0] <= 4:
+        # 2. 如果batch size很小（<= 4），可能是验证阶段
+        if batch_size <= 4:
+            if is_main_process():
+                print(f"🔍 [HVR Manager] 检测原因: batch_size太小 ({batch_size})")
+            return True
+
+        # 3. 如果batch size是10（从错误信息看），很可能是验证阶段
+        if batch_size == 10:
+            if is_main_process():
+                print(f"🔍 [HVR Manager] 检测原因: batch_size=10 (典型验证大小)")
             return True
 
         return False
