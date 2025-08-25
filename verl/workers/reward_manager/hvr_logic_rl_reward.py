@@ -67,10 +67,23 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         if is_main_process():
             print("🎯 [HVR Manager] 开始HVR奖励计算")
             print(f"🔍 [HVR Manager] 输入数据batch keys: {list(data.batch.keys())}")
-            if "responses" in data.batch:
-                print(f"🔍 [HVR Manager] responses形状: {data.batch['responses'].shape}")
-            if "attention_mask" in data.batch:
-                print(f"🔍 [HVR Manager] attention_mask形状: {data.batch['attention_mask'].shape}")
+
+            # 详细检查所有相关张量的形状
+            for key in ["responses", "attention_mask", "rollout_log_probs", "rm_scores"]:
+                if key in data.batch:
+                    tensor = data.batch[key]
+                    print(f"🔍 [HVR Manager] {key}形状: {tensor.shape}")
+                else:
+                    print(f"🔍 [HVR Manager] {key}: 不存在")
+
+            # 检查non_tensor_batch
+            if hasattr(data, 'non_tensor_batch') and data.non_tensor_batch:
+                print(f"🔍 [HVR Manager] non_tensor_batch keys: {list(data.non_tensor_batch.keys())}")
+                for key, value in data.non_tensor_batch.items():
+                    if isinstance(value, (list, tuple)):
+                        print(f"🔍 [HVR Manager] non_tensor_batch[{key}]长度: {len(value)}")
+
+            print(f"🔍 [HVR Manager] 调用栈信息: return_dict={return_dict}")
 
         # 检查是否为验证阶段 (通过batch大小和数据特征判断)
         is_validation = self._is_validation_phase(data)
