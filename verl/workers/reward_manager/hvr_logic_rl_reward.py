@@ -66,6 +66,11 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         """
         if is_main_process():
             print("🎯 [HVR Manager] 开始HVR奖励计算")
+            print(f"🔍 [HVR Manager] 输入数据batch keys: {list(data.batch.keys())}")
+            if "responses" in data.batch:
+                print(f"🔍 [HVR Manager] responses形状: {data.batch['responses'].shape}")
+            if "attention_mask" in data.batch:
+                print(f"🔍 [HVR Manager] attention_mask形状: {data.batch['attention_mask'].shape}")
 
         try:
             # 1. 首先调用父类获取基础奖励
@@ -242,6 +247,8 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         sparse_rewards = self._extract_sparse_rewards_from_tensor(base_reward_tensor)
 
         if is_main_process():
+            print(f"🔍 [HVR Manager] base_reward_tensor形状: {base_reward_tensor.shape}")
+            print(f"🔍 [HVR Manager] 提取的稀疏奖励数量: {len(sparse_rewards)}")
             print(f"🔍 [HVR Manager] 稀疏奖励分布: {dict(zip(*np.unique(sparse_rewards, return_counts=True)))}")
 
         # 2. 准备组数据 (使用log_probs而不是logits)
