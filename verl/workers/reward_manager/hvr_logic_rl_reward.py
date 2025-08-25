@@ -204,9 +204,14 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
 
         # 8. 添加HVR指标 (转换为列表格式)
         for key, value in aggregated_metrics.items():
-            if isinstance(value, (int, float, np.number)):
+            if key.startswith('hvr/r_final_dist_'):
+                # 分布统计指标：将计数值分配给每个样本
+                hvr_extra_info[key] = [float(value)] * batch_size
+            elif isinstance(value, (int, float, np.number)):
+                # 普通数值指标：重复batch_size次
                 hvr_extra_info[key] = [float(value)] * batch_size
             else:
+                # 其他类型保持不变
                 hvr_extra_info[key] = value
 
         # 9. 记录指标历史
@@ -299,9 +304,14 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
 
         # 8. 添加HVR指标 (转换为列表格式)
         for key, value in aggregated_metrics.items():
-            if isinstance(value, (int, float, np.number)):
+            if key.startswith('hvr/r_final_dist_'):
+                # 分布统计指标：将计数值分配给每个样本
+                hvr_extra_info[key] = [float(value)] * batch_size
+            elif isinstance(value, (int, float, np.number)):
+                # 普通数值指标：重复batch_size次
                 hvr_extra_info[key] = [float(value)] * batch_size
             else:
+                # 其他类型保持不变
                 hvr_extra_info[key] = value
 
         # 9. 记录指标历史
