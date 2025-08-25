@@ -116,9 +116,9 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                     print("⚠️ [HVR Manager] 未找到rollout_log_probs，回退到原始LogicRL")
 
                 # 回退到原始LogicRL (确保列表格式)
-                batch_size = base_reward_tensor.shape[0]
-                reward_extra_info["hvr_applied"] = [False] * batch_size
-                reward_extra_info["hvr_fallback_reason"] = ["no_rollout_log_probs"] * batch_size
+                actual_batch_size = base_reward_tensor.shape[0]
+                reward_extra_info["hvr_applied"] = [False] * actual_batch_size
+                reward_extra_info["hvr_fallback_reason"] = ["no_rollout_log_probs"] * actual_batch_size
 
                 if return_dict:
                     return {
@@ -189,27 +189,28 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
 
         # 7. 构建额外信息 (确保所有值都是列表格式)
-        batch_size = len(group_returns)
+        # 使用实际的batch大小，而不是group_returns的长度
+        actual_batch_size = base_reward_tensor.shape[0]
         hvr_extra_info = {
-            "hvr_applied": [True] * batch_size,
-            "hvr_group_return_mean": [mean_return] * batch_size,
-            "hvr_group_return_std": [np.std(group_returns)] * batch_size,
-            "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * batch_size,
-            "hvr_grpo_advantage_std": [np.std(grpo_advantages)] * batch_size,
-            "hvr_sparse_rewards": sparse_rewards,  # 已经是列表
-            "hvr_alpha": [self.hvr_alpha] * batch_size,
-            "hvr_beta": [self.hvr_beta] * batch_size,
-            "hvr_lambda": [self.hvr_lambda] * batch_size,
+            "hvr_applied": [True] * actual_batch_size,
+            "hvr_group_return_mean": [mean_return] * actual_batch_size,
+            "hvr_group_return_std": [np.std(group_returns)] * actual_batch_size,
+            "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * actual_batch_size,
+            "hvr_grpo_advantage_std": [np.std(grpo_advantages)] * actual_batch_size,
+            "hvr_sparse_rewards": sparse_rewards + [0.0] * (actual_batch_size - len(sparse_rewards)),  # 补齐长度
+            "hvr_alpha": [self.hvr_alpha] * actual_batch_size,
+            "hvr_beta": [self.hvr_beta] * actual_batch_size,
+            "hvr_lambda": [self.hvr_lambda] * actual_batch_size,
         }
 
         # 8. 添加HVR指标 (转换为列表格式)
         for key, value in aggregated_metrics.items():
             if key.startswith('hvr/r_final_dist_'):
                 # 分布统计指标：将计数值分配给每个样本
-                hvr_extra_info[key] = [float(value)] * batch_size
+                hvr_extra_info[key] = [float(value)] * actual_batch_size
             elif isinstance(value, (int, float, np.number)):
-                # 普通数值指标：重复batch_size次
-                hvr_extra_info[key] = [float(value)] * batch_size
+                # 普通数值指标：重复actual_batch_size次
+                hvr_extra_info[key] = [float(value)] * actual_batch_size
             else:
                 # 其他类型保持不变
                 hvr_extra_info[key] = value
@@ -288,28 +289,29 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             }
 
         # 7. 构建额外信息 (确保所有值都是列表格式)
-        batch_size = len(group_returns)
+        # 使用实际的batch大小，而不是group_returns的长度
+        actual_batch_size = base_reward_tensor.shape[0]
         hvr_extra_info = {
-            "hvr_applied": [True] * batch_size,
-            "hvr_method": ["logprobs_based"] * batch_size,
-            "hvr_group_return_mean": [mean_return] * batch_size,
-            "hvr_group_return_std": [np.std(group_returns)] * batch_size,
-            "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * batch_size,
-            "hvr_grpo_advantage_std": [np.std(grpo_advantages)] * batch_size,
-            "hvr_sparse_rewards": sparse_rewards,  # 已经是列表
-            "hvr_alpha": [self.hvr_alpha] * batch_size,
-            "hvr_beta": [self.hvr_beta] * batch_size,
-            "hvr_lambda": [self.hvr_lambda] * batch_size,
+            "hvr_applied": [True] * actual_batch_size,
+            "hvr_method": ["logprobs_based"] * actual_batch_size,
+            "hvr_group_return_mean": [mean_return] * actual_batch_size,
+            "hvr_group_return_std": [np.std(group_returns)] * actual_batch_size,
+            "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * actual_batch_size,
+            "hvr_grpo_advantage_std": [np.std(grpo_advantages)] * actual_batch_size,
+            "hvr_sparse_rewards": sparse_rewards + [0.0] * (actual_batch_size - len(sparse_rewards)),  # 补齐长度
+            "hvr_alpha": [self.hvr_alpha] * actual_batch_size,
+            "hvr_beta": [self.hvr_beta] * actual_batch_size,
+            "hvr_lambda": [self.hvr_lambda] * actual_batch_size,
         }
 
         # 8. 添加HVR指标 (转换为列表格式)
         for key, value in aggregated_metrics.items():
             if key.startswith('hvr/r_final_dist_'):
                 # 分布统计指标：将计数值分配给每个样本
-                hvr_extra_info[key] = [float(value)] * batch_size
+                hvr_extra_info[key] = [float(value)] * actual_batch_size
             elif isinstance(value, (int, float, np.number)):
-                # 普通数值指标：重复batch_size次
-                hvr_extra_info[key] = [float(value)] * batch_size
+                # 普通数值指标：重复actual_batch_size次
+                hvr_extra_info[key] = [float(value)] * actual_batch_size
             else:
                 # 其他类型保持不变
                 hvr_extra_info[key] = value
