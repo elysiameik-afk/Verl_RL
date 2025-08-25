@@ -115,10 +115,13 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 # 4. 合并额外信息
                 reward_extra_info.update(hvr_extra_info)
 
+                # 强制确保所有指标长度与batch大小一致
+                hvr_extra_info = self._ensure_consistent_lengths(hvr_extra_info, base_reward_tensor.shape[0])
+
                 if return_dict:
                     return {
                         "reward_tensor": hvr_reward_tensor,
-                        "reward_extra_info": reward_extra_info
+                        "reward_extra_info": hvr_extra_info
                     }
                 else:
                     return hvr_reward_tensor
@@ -131,6 +134,9 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 actual_batch_size = base_reward_tensor.shape[0]
                 reward_extra_info["hvr_applied"] = [False] * actual_batch_size
                 reward_extra_info["hvr_fallback_reason"] = ["no_rollout_log_probs"] * actual_batch_size
+
+                # 强制确保所有指标长度与batch大小一致
+                reward_extra_info = self._ensure_consistent_lengths(reward_extra_info, base_reward_tensor.shape[0])
 
                 if return_dict:
                     return {
@@ -186,6 +192,49 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             return True
 
         return False
+
+    def _ensure_consistent_lengths(self, extra_info_dict, expected_length):
+        """
+        强制确保所有extra_info字段的长度都与expected_length一致
+
+        这是解决验证阶段长度不匹配问题的根本方案
+        """
+        if is_main_process():
+            print(f"🔧 [HVR Manager] 强制对齐指标长度到 {expected_length}")
+
+        aligned_dict = {}
+        for key, value in extra_info_dict.items():
+            if isinstance(value, list):
+                current_length = len(value)
+                if current_length == expected_length:
+                    # 长度已经正确
+                    aligned_dict[key] = value
+                elif current_length < expected_length:
+                    # 长度不足，用最后一个值或默认值补齐
+                    if current_length > 0:
+                        fill_value = value[-1]  # 用最后一个值补齐
+                    else:
+                        fill_value = 0.0
+
+                    aligned_value = value + [fill_value] * (expected_length - current_length)
+                    aligned_dict[key] = aligned_value
+
+                    if is_main_process():
+                        print(f"🔧 [HVR Manager] 补齐 {key}: {current_length} → {expected_length}")
+                else:
+                    # 长度过长，截断
+                    aligned_dict[key] = value[:expected_length]
+
+                    if is_main_process():
+                        print(f"🔧 [HVR Manager] 截断 {key}: {current_length} → {expected_length}")
+            else:
+                # 非列表值，转换为列表
+                aligned_dict[key] = [value] * expected_length
+
+                if is_main_process():
+                    print(f"🔧 [HVR Manager] 转换 {key}: 标量 → 长度{expected_length}的列表")
+
+        return aligned_dict
 
     def _apply_hvr_to_rewards(self, data, base_reward_tensor, logits):
         """
