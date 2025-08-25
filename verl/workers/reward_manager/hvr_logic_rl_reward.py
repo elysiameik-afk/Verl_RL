@@ -72,6 +72,13 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             if "attention_mask" in data.batch:
                 print(f"🔍 [HVR Manager] attention_mask形状: {data.batch['attention_mask'].shape}")
 
+        # 检查是否为验证阶段 (通过batch大小和数据特征判断)
+        is_validation = self._is_validation_phase(data)
+        if is_validation:
+            if is_main_process():
+                print("🔍 [HVR Manager] 检测到验证阶段，回退到LogicRL以避免指标冲突")
+            return super().__call__(data, return_dict)
+
         try:
             # 1. 首先调用父类获取基础奖励
             if "rm_scores" in data.batch.keys():
@@ -140,6 +147,25 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
 
             # 完全回退到父类
             return super().__call__(data, return_dict)
+
+    def _is_validation_phase(self, data):
+        """
+        检测是否为验证阶段
+
+        验证阶段的特征：
+        1. 通常batch size较小且固定
+        2. 可能缺少某些训练时的字段
+        3. 数据结构可能略有不同
+        """
+        # 简单的启发式检测：如果没有rollout_log_probs，很可能是验证阶段
+        if "rollout_log_probs" not in data.batch:
+            return True
+
+        # 如果batch size很小（<= 4），可能是验证阶段
+        if "responses" in data.batch and data.batch["responses"].shape[0] <= 4:
+            return True
+
+        return False
 
     def _apply_hvr_to_rewards(self, data, base_reward_tensor, logits):
         """
