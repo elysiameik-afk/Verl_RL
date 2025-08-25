@@ -202,8 +202,12 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             "hvr_lambda": [self.hvr_lambda] * batch_size,
         }
 
-        # 8. 添加HVR指标
-        hvr_extra_info.update(aggregated_metrics)
+        # 8. 添加HVR指标 (转换为列表格式)
+        for key, value in aggregated_metrics.items():
+            if isinstance(value, (int, float, np.number)):
+                hvr_extra_info[key] = [float(value)] * batch_size
+            else:
+                hvr_extra_info[key] = value
 
         # 9. 记录指标历史
         self.hvr_metrics_history.append(aggregated_metrics)
@@ -293,8 +297,12 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             "hvr_lambda": [self.hvr_lambda] * batch_size,
         }
 
-        # 8. 添加HVR指标
-        hvr_extra_info.update(aggregated_metrics)
+        # 8. 添加HVR指标 (转换为列表格式)
+        for key, value in aggregated_metrics.items():
+            if isinstance(value, (int, float, np.number)):
+                hvr_extra_info[key] = [float(value)] * batch_size
+            else:
+                hvr_extra_info[key] = value
 
         # 9. 记录指标历史
         self.hvr_metrics_history.append(aggregated_metrics)
