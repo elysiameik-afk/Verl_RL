@@ -263,8 +263,18 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             if len(valid_positions) > 0:
                 hvr_reward_tensor[i, valid_positions] = seq_advantage
 
-        # 6. 聚合HVR指标
-        aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
+        # 6. 聚合HVR指标 (使用安全的聚合方式)
+        try:
+            aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
+        except Exception as e:
+            if is_main_process():
+                print(f"⚠️ [HVR Manager] 指标聚合失败: {e}，使用简化指标")
+            # 使用简化的指标格式
+            aggregated_metrics = {
+                'hvr/success_rate': hvr_metrics['successful_count'] / hvr_metrics['total_count'],
+                'hvr/total_sequences': hvr_metrics['total_count'],
+                'hvr/successful_sequences': hvr_metrics['successful_count'],
+            }
 
         # 7. 构建额外信息
         hvr_extra_info = {
@@ -341,8 +351,9 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         """
         group_returns = []
         hvr_metrics = {
-            'log_prob_values': [],
-            'hvr_rewards': [],
+            'ervf_values': [],      # 兼容aggregate_hvr_metrics_dict
+            'entropies': [],        # 兼容aggregate_hvr_metrics_dict
+            'hvr_rewards': [],      # 兼容aggregate_hvr_metrics_dict
             'r_finals': [],
             'v_targets': [],
             'sequence_lengths': [],
@@ -395,8 +406,9 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 total_return = sum(r_hvr_list)
                 group_returns.append(total_return)
 
-                # 收集指标
-                hvr_metrics['log_prob_values'].extend([lp.item() for lp in log_probs])
+                # 收集指标 (兼容aggregate_hvr_metrics_dict格式)
+                hvr_metrics['ervf_values'].extend(v_proxy_list[:-1])  # 使用v_proxy作为ERVF代理
+                hvr_metrics['entropies'].extend([0.0] * sequence_length)  # 简化版没有熵计算
                 hvr_metrics['hvr_rewards'].extend(r_hvr_list)
                 hvr_metrics['r_finals'].append(r_final)
                 hvr_metrics['v_targets'].append(V_target)
