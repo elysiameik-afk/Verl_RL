@@ -68,6 +68,12 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         print(f"�1️⃣ [HVR Manager] __call__ 被调用! return_dict={return_dict}")
         print(f"�1️⃣ [HVR Manager] 输入数据keys: {list(data.batch.keys())}")
 
+        # 🔧 检查是否为验证阶段，如果是则回退到LogicRL
+        is_validation = self._is_validation_phase(data)
+        if is_validation:
+            print(f"🔍1️⃣ [HVR Manager] 检测到验证阶段，回退到LogicRL避免指标冲突")
+            return super().__call__(data, return_dict)
+
         if is_main_process():
             print("🎯 [HVR Manager] 开始HVR奖励计算")
 
@@ -205,10 +211,10 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         # 6. 聚合HVR指标
         aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
 
-        # 7. 构建额外信息 (确保所有值都是列表格式)
+        # 7. 构建额外信息 (确保所有值都是列表格式，且只包含数值类型)
         batch_size = base_reward_tensor.shape[0]
         hvr_extra_info = {
-            "hvr_applied": [True] * batch_size,
+            "hvr_applied": [1.0] * batch_size,  # 修正：使用数值而非布尔值
             "hvr_group_return_mean": [mean_return] * batch_size,
             "hvr_group_return_std": [np.std(group_returns)] * batch_size,
             "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * batch_size,
@@ -219,7 +225,7 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             "hvr_lambda": [self.hvr_lambda] * batch_size,
         }
 
-        # 8. 添加HVR指标 (转换为列表格式)
+        # 8. 添加HVR指标 (转换为列表格式，只保留数值类型)
         for key, value in aggregated_metrics.items():
             if key.startswith('hvr/r_final_dist_'):
                 # 分布统计指标：将计数值分配给每个样本
@@ -228,8 +234,10 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 # 普通数值指标：重复batch_size次
                 hvr_extra_info[key] = [float(value)] * batch_size
             else:
-                # 其他类型保持不变
-                hvr_extra_info[key] = value
+                # 跳过非数值类型，避免reduce_metrics错误
+                if is_main_process():
+                    print(f"⚠️ [HVR Manager] 跳过非数值指标: {key} = {value} ({type(value)})")
+                continue
 
         # 9. 记录指标历史
         self.hvr_metrics_history.append(aggregated_metrics)
@@ -316,11 +324,11 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         # 6. 聚合HVR指标
         aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
 
-        # 7. 构建额外信息 (确保所有值都是列表格式)
+        # 7. 构建额外信息 (确保所有值都是列表格式，且只包含数值类型)
         batch_size = base_reward_tensor.shape[0]
         hvr_extra_info = {
-            "hvr_applied": [True] * batch_size,
-            "hvr_method": ["logprobs_based"] * batch_size,
+            "hvr_applied": [1.0] * batch_size,  # 修正：使用数值而非布尔值
+            "hvr_method_id": [1.0] * batch_size,  # 修正：使用数值ID而非字符串
             "hvr_group_return_mean": [mean_return] * batch_size,
             "hvr_group_return_std": [np.std(group_returns)] * batch_size,
             "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * batch_size,
@@ -340,8 +348,10 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 # 普通数值指标：重复batch_size次
                 hvr_extra_info[key] = [float(value)] * batch_size
             else:
-                # 其他类型保持不变
-                hvr_extra_info[key] = value
+                # 跳过非数值类型，避免reduce_metrics错误
+                if is_main_process():
+                    print(f"⚠️ [HVR Manager] 跳过非数值指标: {key} = {value} ({type(value)})")
+                continue
 
         # 9. 记录指标历史
         self.hvr_metrics_history.append(aggregated_metrics)
