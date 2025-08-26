@@ -38,6 +38,7 @@ from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
 from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad, ulysses_pad_and_slice_inputs
 from verl.workers.actor import BasePPOActor
+from verl.trainer.ppo.core_algos import is_main_process
 
 if is_cuda_available:
     from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
@@ -408,6 +409,9 @@ class DataParallelPPOActor(BasePPOActor):
         # make sure we are in training mode
         self.actor_module.train()
 
+        # 🎯 在开始时提取HVR指标
+        hvr_metrics = self._extract_hvr_metrics_from_data(data)
+
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         multi_turn = data.meta_info.get("multi_turn", False)
 
@@ -614,16 +618,30 @@ class DataParallelPPOActor(BasePPOActor):
                 data = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, data)
 
-        # 🎯 提取HVR指标并记录到WandB
-        self._extract_and_record_hvr_metrics(data, metrics)
+        # 🎯 记录HVR指标到WandB
+        if hvr_metrics:
+            append_to_dict(metrics, hvr_metrics)
+            if is_main_process():
+                print(f"✅ [HVR Actor] 成功记录 {len(hvr_metrics)} 个HVR指标到WandB")
+                # 打印关键指标
+                key_metrics = []
+                if 'hvr/ervf_value_mean' in hvr_metrics:
+                    key_metrics.append(f"ERVF={hvr_metrics['hvr/ervf_value_mean']:.3f}")
+                if 'hvr/entropy_mean' in hvr_metrics:
+                    key_metrics.append(f"熵={hvr_metrics['hvr/entropy_mean']:.3f}")
+                if 'hvr/reward_mean' in hvr_metrics:
+                    key_metrics.append(f"奖励={hvr_metrics['hvr/reward_mean']:.3f}")
+                if key_metrics:
+                    print(f"🎯 [HVR Actor] {' | '.join(key_metrics)}")
 
         self.actor_optimizer.zero_grad()
         return metrics
 
-    def _extract_and_record_hvr_metrics(self, data, metrics):
-        """从data中提取HVR指标并记录到metrics"""
+    def _extract_hvr_metrics_from_data(self, data: DataProto):
+        """从DataProto中提取HVR指标"""
+        hvr_metrics = {}
+
         if hasattr(data, 'non_tensor_batch') and data.non_tensor_batch:
-            hvr_metrics = {}
             for key, values in data.non_tensor_batch.items():
                 # 只处理HVR相关的指标
                 if key.startswith('hvr') or 'hvr' in key.lower():
@@ -644,22 +662,13 @@ class DataParallelPPOActor(BasePPOActor):
                                 hvr_metrics[key] = values[0]
                     except Exception as e:
                         # 如果处理失败，记录错误但不中断
-                        print(f"⚠️ [HVR Actor] 处理指标 {key} 失败: {e}")
+                        if is_main_process():
+                            print(f"⚠️ [HVR Actor] 处理指标 {key} 失败: {e}")
                         continue
 
-            # 使用append_to_dict将HVR指标添加到metrics中
-            if hvr_metrics:
-                append_to_dict(metrics, hvr_metrics)
-                print(f"✅ [HVR Actor] 成功记录 {len(hvr_metrics)} 个HVR指标到WandB")
-                # 打印关键指标
-                key_metrics = []
-                if 'hvr/ervf_value_mean' in hvr_metrics:
-                    key_metrics.append(f"ERVF={hvr_metrics['hvr/ervf_value_mean']:.3f}")
-                if 'hvr/entropy_mean' in hvr_metrics:
-                    key_metrics.append(f"熵={hvr_metrics['hvr/entropy_mean']:.3f}")
-                if 'hvr/reward_mean' in hvr_metrics:
-                    key_metrics.append(f"奖励={hvr_metrics['hvr/reward_mean']:.3f}")
-                if key_metrics:
-                    print(f"🎯 [HVR Actor] {' | '.join(key_metrics)}")
+        if hvr_metrics and is_main_process():
+            print(f"🔍 [HVR Actor] 提取到 {len(hvr_metrics)} 个HVR指标: {list(hvr_metrics.keys())}")
+
+        return hvr_metrics
 
 # HVR相关方法已移除 - 现在由HVR Manager处理
