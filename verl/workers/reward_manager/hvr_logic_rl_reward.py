@@ -187,21 +187,31 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         # 6. 聚合HVR指标
         aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
 
-        # 7. 构建额外信息
+        # 7. 构建额外信息 (确保所有值都是列表格式)
+        batch_size = base_reward_tensor.shape[0]
         hvr_extra_info = {
-            "hvr_applied": True,
-            "hvr_group_return_mean": mean_return,
-            "hvr_group_return_std": np.std(group_returns),
-            "hvr_grpo_advantage_mean": np.mean(grpo_advantages),
-            "hvr_grpo_advantage_std": np.std(grpo_advantages),
-            "hvr_sparse_rewards": sparse_rewards,
-            "hvr_alpha": self.hvr_alpha,
-            "hvr_beta": self.hvr_beta,
-            "hvr_lambda": self.hvr_lambda,
+            "hvr_applied": [True] * batch_size,
+            "hvr_group_return_mean": [mean_return] * batch_size,
+            "hvr_group_return_std": [np.std(group_returns)] * batch_size,
+            "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * batch_size,
+            "hvr_grpo_advantage_std": [np.std(grpo_advantages)] * batch_size,
+            "hvr_sparse_rewards": sparse_rewards + [0.0] * (batch_size - len(sparse_rewards)),  # 补齐长度
+            "hvr_alpha": [self.hvr_alpha] * batch_size,
+            "hvr_beta": [self.hvr_beta] * batch_size,
+            "hvr_lambda": [self.hvr_lambda] * batch_size,
         }
 
-        # 8. 添加HVR指标
-        hvr_extra_info.update(aggregated_metrics)
+        # 8. 添加HVR指标 (转换为列表格式)
+        for key, value in aggregated_metrics.items():
+            if key.startswith('hvr/r_final_dist_'):
+                # 分布统计指标：将计数值分配给每个样本
+                hvr_extra_info[key] = [float(value)] * batch_size
+            elif isinstance(value, (int, float, np.number)):
+                # 普通数值指标：重复batch_size次
+                hvr_extra_info[key] = [float(value)] * batch_size
+            else:
+                # 其他类型保持不变
+                hvr_extra_info[key] = value
 
         # 9. 记录指标历史
         self.hvr_metrics_history.append(aggregated_metrics)
@@ -278,22 +288,32 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         # 6. 聚合HVR指标
         aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
 
-        # 7. 构建额外信息
+        # 7. 构建额外信息 (确保所有值都是列表格式)
+        batch_size = base_reward_tensor.shape[0]
         hvr_extra_info = {
-            "hvr_applied": True,
-            "hvr_method": "logprobs_based",
-            "hvr_group_return_mean": mean_return,
-            "hvr_group_return_std": np.std(group_returns),
-            "hvr_grpo_advantage_mean": np.mean(grpo_advantages),
-            "hvr_grpo_advantage_std": np.std(grpo_advantages),
-            "hvr_sparse_rewards": sparse_rewards,
-            "hvr_alpha": self.hvr_alpha,
-            "hvr_beta": self.hvr_beta,
-            "hvr_lambda": self.hvr_lambda,
+            "hvr_applied": [True] * batch_size,
+            "hvr_method": ["logprobs_based"] * batch_size,
+            "hvr_group_return_mean": [mean_return] * batch_size,
+            "hvr_group_return_std": [np.std(group_returns)] * batch_size,
+            "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * batch_size,
+            "hvr_grpo_advantage_std": [np.std(grpo_advantages)] * batch_size,
+            "hvr_sparse_rewards": sparse_rewards + [0.0] * (batch_size - len(sparse_rewards)),  # 补齐长度
+            "hvr_alpha": [self.hvr_alpha] * batch_size,
+            "hvr_beta": [self.hvr_beta] * batch_size,
+            "hvr_lambda": [self.hvr_lambda] * batch_size,
         }
 
-        # 8. 添加HVR指标
-        hvr_extra_info.update(aggregated_metrics)
+        # 8. 添加HVR指标 (转换为列表格式)
+        for key, value in aggregated_metrics.items():
+            if key.startswith('hvr/r_final_dist_'):
+                # 分布统计指标：将计数值分配给每个样本
+                hvr_extra_info[key] = [float(value)] * batch_size
+            elif isinstance(value, (int, float, np.number)):
+                # 普通数值指标：重复batch_size次
+                hvr_extra_info[key] = [float(value)] * batch_size
+            else:
+                # 其他类型保持不变
+                hvr_extra_info[key] = value
 
         # 9. 记录指标历史
         self.hvr_metrics_history.append(aggregated_metrics)
