@@ -1050,7 +1050,23 @@ class RayPPOTrainer:
                         batch.batch["token_level_scores"] = reward_tensor
 
                         if reward_extra_infos_dict:
+                            # 🔍 调试：检查reward_extra_infos_dict
+                            hvr_keys = [k for k in reward_extra_infos_dict.keys() if 'hvr' in k.lower()]
+                            if hvr_keys:
+                                print(f"🔍 [Trainer] 收到 {len(hvr_keys)} 个HVR指标: {hvr_keys[:5]}...")
+                                for key in hvr_keys[:3]:  # 只打印前3个的详细信息
+                                    value = reward_extra_infos_dict[key]
+                                    print(f"   {key}: {type(value).__name__}, 长度={len(value) if hasattr(value, '__len__') else 'N/A'}")
+
                             batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+
+                            # 🔍 调试：检查更新后的non_tensor_batch
+                            hvr_keys_after = [k for k in batch.non_tensor_batch.keys() if 'hvr' in k.lower()]
+                            if hvr_keys_after:
+                                print(f"🔍 [Trainer] non_tensor_batch中有 {len(hvr_keys_after)} 个HVR字段")
+                                for key in hvr_keys_after[:3]:
+                                    arr = batch.non_tensor_batch[key]
+                                    print(f"   {key}: shape={arr.shape}, dtype={arr.dtype}")
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:

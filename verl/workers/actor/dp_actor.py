@@ -411,6 +411,8 @@ class DataParallelPPOActor(BasePPOActor):
 
         # 🎯 在开始时提取HVR指标
         hvr_metrics = self._extract_hvr_metrics_from_data(data)
+        if is_main_process():
+            print(f"🔍 [Actor] update_policy开始，提取到 {len(hvr_metrics)} 个HVR指标")
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         multi_turn = data.meta_info.get("multi_turn", False)
@@ -641,11 +643,24 @@ class DataParallelPPOActor(BasePPOActor):
         """从DataProto中提取HVR指标"""
         hvr_metrics = {}
 
+        if is_main_process():
+            print(f"🔍 [Actor] 检查DataProto: hasattr(non_tensor_batch)={hasattr(data, 'non_tensor_batch')}")
+            if hasattr(data, 'non_tensor_batch'):
+                print(f"🔍 [Actor] non_tensor_batch不为空: {data.non_tensor_batch is not None}")
+                if data.non_tensor_batch:
+                    all_keys = list(data.non_tensor_batch.keys())
+                    hvr_keys = [k for k in all_keys if 'hvr' in k.lower()]
+                    print(f"🔍 [Actor] non_tensor_batch总共 {len(all_keys)} 个字段")
+                    print(f"🔍 [Actor] 其中HVR相关字段 {len(hvr_keys)} 个: {hvr_keys[:5]}...")
+
         if hasattr(data, 'non_tensor_batch') and data.non_tensor_batch:
             for key, values in data.non_tensor_batch.items():
                 # 只处理HVR相关的指标
                 if key.startswith('hvr') or 'hvr' in key.lower():
                     try:
+                        if is_main_process():
+                            print(f"🔍 [Actor] 处理HVR指标 {key}: type={type(values)}, shape={getattr(values, 'shape', 'N/A')}")
+
                         # 将numpy数组转换为标量值
                         if isinstance(values, np.ndarray) and values.size > 0:
                             # 对于数值类型，计算均值
@@ -660,14 +675,18 @@ class DataParallelPPOActor(BasePPOActor):
                                 hvr_metrics[key] = float(np.mean(values))
                             else:
                                 hvr_metrics[key] = values[0]
+
+                        if is_main_process():
+                            print(f"   → 转换为: {hvr_metrics[key]}")
+
                     except Exception as e:
                         # 如果处理失败，记录错误但不中断
                         if is_main_process():
                             print(f"⚠️ [HVR Actor] 处理指标 {key} 失败: {e}")
                         continue
 
-        if hvr_metrics and is_main_process():
-            print(f"🔍 [HVR Actor] 提取到 {len(hvr_metrics)} 个HVR指标: {list(hvr_metrics.keys())}")
+        if is_main_process():
+            print(f"🔍 [HVR Actor] 最终提取到 {len(hvr_metrics)} 个HVR指标: {list(hvr_metrics.keys())}")
 
         return hvr_metrics
 

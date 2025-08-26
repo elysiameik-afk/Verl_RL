@@ -234,6 +234,16 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             ]
             print(" | ".join(key_metrics))
 
+            # 🔍 调试：输出hvr_extra_info的详细信息
+            print(f"🔍 [HVR Manager] 返回的hvr_extra_info包含 {len(hvr_extra_info)} 个字段:")
+            for key, value in hvr_extra_info.items():
+                if isinstance(value, list):
+                    print(f"   {key}: 列表长度={len(value)}, 前3个值={value[:3]}")
+                else:
+                    print(f"   {key}: {type(value).__name__}={value}")
+            print(f"🔍 [HVR Manager] return_dict={return_dict}")
+            print(f"🔍 [HVR Manager] 即将返回数据到trainer...")
+
         return hvr_reward_tensor, hvr_extra_info
 
     def _apply_hvr_to_rewards_with_logprobs(self, data, base_reward_tensor, rollout_log_probs):
