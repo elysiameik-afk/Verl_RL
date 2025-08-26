@@ -1050,23 +1050,25 @@ class RayPPOTrainer:
                         batch.batch["token_level_scores"] = reward_tensor
 
                         if reward_extra_infos_dict:
-                            # 🔍 调试：检查reward_extra_infos_dict
+                            # 🔍 环节3: 检查reward_extra_infos_dict
                             hvr_keys = [k for k in reward_extra_infos_dict.keys() if 'hvr' in k.lower()]
+                            print(f"🔍3️⃣ [Trainer] 收到reward_extra_infos_dict，总共 {len(reward_extra_infos_dict)} 个字段")
+                            print(f"🔍3️⃣ [Trainer] 其中HVR字段 {len(hvr_keys)} 个: {hvr_keys[:5]}...")
+
                             if hvr_keys:
-                                print(f"🔍 [Trainer] 收到 {len(hvr_keys)} 个HVR指标: {hvr_keys[:5]}...")
                                 for key in hvr_keys[:3]:  # 只打印前3个的详细信息
                                     value = reward_extra_infos_dict[key]
-                                    print(f"   {key}: {type(value).__name__}, 长度={len(value) if hasattr(value, '__len__') else 'N/A'}")
+                                    print(f"🔍3️⃣    {key}: {type(value).__name__}, 长度={len(value) if hasattr(value, '__len__') else 'N/A'}")
 
                             batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
 
-                            # 🔍 调试：检查更新后的non_tensor_batch
+                            # 🔍 环节3: 检查更新后的non_tensor_batch
                             hvr_keys_after = [k for k in batch.non_tensor_batch.keys() if 'hvr' in k.lower()]
+                            print(f"🔍3️⃣ [Trainer] non_tensor_batch更新后，HVR字段 {len(hvr_keys_after)} 个")
                             if hvr_keys_after:
-                                print(f"🔍 [Trainer] non_tensor_batch中有 {len(hvr_keys_after)} 个HVR字段")
                                 for key in hvr_keys_after[:3]:
                                     arr = batch.non_tensor_batch[key]
-                                    print(f"   {key}: shape={arr.shape}, dtype={arr.dtype}")
+                                    print(f"🔍3️⃣    {key}: shape={arr.shape}, dtype={arr.dtype}")
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
@@ -1147,6 +1149,11 @@ class RayPPOTrainer:
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
+
+                # 🔍 环节5: 确认metrics发送到WandB
+                hvr_metrics_final = [k for k in metrics.keys() if 'hvr' in k.lower()]
+                print(f"🔍5️⃣ [Trainer] 即将发送到WandB的metrics中，HVR字段 {len(hvr_metrics_final)} 个: {hvr_metrics_final[:5]}...")
+
                 print("before_step",self.global_steps)
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps, commit=True)

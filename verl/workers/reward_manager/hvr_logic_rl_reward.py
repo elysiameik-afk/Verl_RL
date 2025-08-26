@@ -64,9 +64,10 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         3. 如果有logits，应用HVR重塑；否则回退到原始LogicRL
         4. 返回奖励张量和额外信息
         """
-        if is_main_process():
-            print(f"🚀 [HVR Manager] __call__ 被调用! return_dict={return_dict}")
-            print(f"🚀 [HVR Manager] 输入数据keys: {list(data.batch.keys())}")
+        # 🔍 环节1: 确认HVR Manager被调用
+        print(f"�1️⃣ [HVR Manager] __call__ 被调用! return_dict={return_dict}")
+        print(f"�1️⃣ [HVR Manager] 输入数据keys: {list(data.batch.keys())}")
+
         if is_main_process():
             print("🎯 [HVR Manager] 开始HVR奖励计算")
 
@@ -111,12 +112,13 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                         "reward_tensor": hvr_reward_tensor,
                         "reward_extra_info": reward_extra_info
                     }
-                    if is_main_process():
-                        print(f"🚀 [HVR Manager] 返回字典格式，包含 {len(reward_extra_info)} 个extra_info字段")
+                    # 🔍 环节2: 确认返回字典格式
+                    print(f"�2️⃣ [HVR Manager] 返回字典格式，包含 {len(reward_extra_info)} 个extra_info字段")
+                    hvr_keys = [k for k in reward_extra_info.keys() if 'hvr' in k.lower()]
+                    print(f"🔍2️⃣ [HVR Manager] 其中HVR字段 {len(hvr_keys)} 个: {hvr_keys[:5]}...")
                     return result
                 else:
-                    if is_main_process():
-                        print(f"🚀 [HVR Manager] 返回tensor格式，丢失了 {len(reward_extra_info)} 个HVR指标!")
+                    print(f"�2️⃣ [HVR Manager] 返回tensor格式，丢失了 {len(reward_extra_info)} 个HVR指标!")
                     return hvr_reward_tensor
 
             else:
