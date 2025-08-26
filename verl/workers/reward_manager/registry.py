@@ -32,7 +32,7 @@ def register(name):
 
 def get_reward_manager_cls(name):
     """Get the reward manager class with a given name.
-    
+
     Args:
         name: `(str)`
             The name of the reward manager.
@@ -40,6 +40,13 @@ def get_reward_manager_cls(name):
     Returns:
         `(type)`: The reward manager class.
     """
+    # 🔍 调试：检查注册表
+    print(f"🔍🔍 [Registry] 请求reward manager: {name}")
+    print(f"🔍🔍 [Registry] 已注册的managers: {list(REWARD_MANAGER_REGISTRY.keys())}")
+
     if name not in REWARD_MANAGER_REGISTRY:
-        raise ValueError(f"Unknown reward manager: {name}")
-    return REWARD_MANAGER_REGISTRY[name]
+        raise ValueError(f"Unknown reward manager: {name}. Available: {list(REWARD_MANAGER_REGISTRY.keys())}")
+
+    selected_cls = REWARD_MANAGER_REGISTRY[name]
+    print(f"🔍🔍 [Registry] 选择的manager类: {selected_cls}")
+    return selected_cls

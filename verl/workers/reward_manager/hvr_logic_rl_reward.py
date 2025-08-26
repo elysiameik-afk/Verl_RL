@@ -138,12 +138,20 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                     return base_reward_tensor
 
         except Exception as e:
-            if is_main_process():
-                print(f"❌ [HVR Manager] HVR计算失败: {e}")
-                print("   回退到原始LogicRL")
+            print(f"❌❌❌ [HVR Manager] HVR计算失败: {e}")
+            print(f"❌❌❌ [HVR Manager] 异常类型: {type(e).__name__}")
+            print(f"❌❌❌ [HVR Manager] 异常详情: {str(e)}")
+            import traceback
+            print(f"❌❌❌ [HVR Manager] 堆栈跟踪:")
+            traceback.print_exc()
+            print("❌❌❌ [HVR Manager] 回退到原始LogicRL")
 
             # 完全回退到父类
-            return super().__call__(data, return_dict)
+            result = super().__call__(data, return_dict)
+            print(f"❌❌❌ [HVR Manager] 父类返回类型: {type(result)}")
+            if isinstance(result, dict):
+                print(f"❌❌❌ [HVR Manager] 父类返回字典keys: {list(result.keys())}")
+            return result
 
     def _apply_hvr_to_rewards(self, data, base_reward_tensor, logits):
         """
