@@ -65,6 +65,9 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         4. 返回奖励张量和额外信息
         """
         if is_main_process():
+            print(f"🚀 [HVR Manager] __call__ 被调用! return_dict={return_dict}")
+            print(f"🚀 [HVR Manager] 输入数据keys: {list(data.batch.keys())}")
+        if is_main_process():
             print("🎯 [HVR Manager] 开始HVR奖励计算")
 
         try:
@@ -104,11 +107,16 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 reward_extra_info.update(hvr_extra_info)
 
                 if return_dict:
-                    return {
+                    result = {
                         "reward_tensor": hvr_reward_tensor,
                         "reward_extra_info": reward_extra_info
                     }
+                    if is_main_process():
+                        print(f"🚀 [HVR Manager] 返回字典格式，包含 {len(reward_extra_info)} 个extra_info字段")
+                    return result
                 else:
+                    if is_main_process():
+                        print(f"🚀 [HVR Manager] 返回tensor格式，丢失了 {len(reward_extra_info)} 个HVR指标!")
                     return hvr_reward_tensor
 
             else:
