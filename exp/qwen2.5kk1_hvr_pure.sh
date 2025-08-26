@@ -11,7 +11,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_files=/root/autodl-tmp/myverl/data/kk/4ppl_few/train.parquet \
     data.val_files=/root/autodl-tmp/myverl/data/kk/4ppl_few/test.parquet \
     data.train_batch_size=16 \
-    data.val_batch_size=8 \
+    data.val_batch_size=10 \
     data.max_prompt_length=4096 \
     data.max_response_length=2048 \
     actor_rollout_ref.model.path=/root/autodl-tmp/myverl/mymodels/qwen3-0.6b \
@@ -35,14 +35,14 @@ python3 -m verl.trainer.main_ppo \
     algorithm.kl_ctrl.kl_coef=0.05 \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
-    trainer.project_name=Qwen2.5-0.5-HVR-GRPO \
-    trainer.experiment_name=HVR_GRPO_Integration_Test \
+    trainer.project_name=Qwen2.5-0.5-TokenEMA \
+    trainer.experiment_name=HVR_3_1_0.1_0.5_T \
     trainer.n_gpus_per_node=1 \
-    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/HVR_GRPO \
+    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/HVR_3_1_0.1_0.5_T  \
     trainer.nnodes=1 \
     trainer.save_freq=4 \
     trainer.test_freq=1 \
-    trainer.total_epochs=8 \
+    trainer.total_epochs=4 \
     reward_model.reward_manager=hvr_logic_rl \
     +reward_model.reward_kwargs.hvr_alpha=1.0 \
     +reward_model.reward_kwargs.hvr_beta=0.1 \
