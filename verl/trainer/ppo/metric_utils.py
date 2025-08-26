@@ -166,6 +166,39 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
         "prompt_length/min": torch.min(prompt_length).detach().item(),
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
     }
+
+    # 🎯 添加HVR专属指标处理
+    if batch.non_tensor_batch:
+        hvr_metrics = {}
+        for key, values in batch.non_tensor_batch.items():
+            # 只处理HVR相关的指标
+            if key.startswith('hvr') or 'hvr' in key.lower():
+                try:
+                    # 将numpy数组转换为标量值
+                    if isinstance(values, np.ndarray) and values.size > 0:
+                        # 对于数值类型，计算均值
+                        if np.issubdtype(values.dtype, np.number):
+                            hvr_metrics[key] = float(np.mean(values))
+                        else:
+                            # 对于非数值类型，取第一个值
+                            hvr_metrics[key] = values[0] if len(values) > 0 else 0
+                    elif isinstance(values, (list, tuple)) and len(values) > 0:
+                        # 处理列表类型
+                        if isinstance(values[0], (int, float)):
+                            hvr_metrics[key] = float(np.mean(values))
+                        else:
+                            hvr_metrics[key] = values[0]
+                except Exception as e:
+                    # 如果处理失败，记录错误但不中断
+                    print(f"⚠️ [HVR Metrics] 处理指标 {key} 失败: {e}")
+                    continue
+
+        # 将HVR指标添加到主指标字典中
+        metrics.update(hvr_metrics)
+
+        if hvr_metrics:
+            print(f"✅ [HVR Metrics] 成功添加 {len(hvr_metrics)} 个HVR指标到WandB")
+
     return metrics
 
 

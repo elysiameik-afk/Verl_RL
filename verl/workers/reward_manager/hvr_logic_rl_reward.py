@@ -66,31 +66,6 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         """
         if is_main_process():
             print("🎯 [HVR Manager] 开始HVR奖励计算")
-            print(f"🔍 [HVR Manager] 输入数据batch keys: {list(data.batch.keys())}")
-
-            # 详细检查所有相关张量的形状
-            for key in ["responses", "attention_mask", "rollout_log_probs", "rm_scores"]:
-                if key in data.batch:
-                    tensor = data.batch[key]
-                    print(f"🔍 [HVR Manager] {key}形状: {tensor.shape}")
-                else:
-                    print(f"🔍 [HVR Manager] {key}: 不存在")
-
-            # 检查non_tensor_batch
-            if hasattr(data, 'non_tensor_batch') and data.non_tensor_batch:
-                print(f"🔍 [HVR Manager] non_tensor_batch keys: {list(data.non_tensor_batch.keys())}")
-                for key, value in data.non_tensor_batch.items():
-                    if isinstance(value, (list, tuple)):
-                        print(f"🔍 [HVR Manager] non_tensor_batch[{key}]长度: {len(value)}")
-
-            print(f"🔍 [HVR Manager] 调用栈信息: return_dict={return_dict}")
-
-        # 检查是否为验证阶段 (通过batch大小和数据特征判断)
-        is_validation = self._is_validation_phase(data)
-        if is_validation:
-            if is_main_process():
-                print("🔍 [HVR Manager] 检测到验证阶段，回退到LogicRL以避免指标冲突")
-            return super().__call__(data, return_dict)
 
         try:
             # 1. 首先调用父类获取基础奖励
@@ -128,13 +103,10 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 # 4. 合并额外信息
                 reward_extra_info.update(hvr_extra_info)
 
-                # 强制确保所有指标长度与batch大小一致
-                hvr_extra_info = self._ensure_consistent_lengths(hvr_extra_info, base_reward_tensor.shape[0])
-
                 if return_dict:
                     return {
                         "reward_tensor": hvr_reward_tensor,
-                        "reward_extra_info": hvr_extra_info
+                        "reward_extra_info": reward_extra_info
                     }
                 else:
                     return hvr_reward_tensor
@@ -143,13 +115,9 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 if is_main_process():
                     print("⚠️ [HVR Manager] 未找到rollout_log_probs，回退到原始LogicRL")
 
-                # 回退到原始LogicRL (确保列表格式)
-                actual_batch_size = base_reward_tensor.shape[0]
-                reward_extra_info["hvr_applied"] = [False] * actual_batch_size
-                reward_extra_info["hvr_fallback_reason"] = ["no_rollout_log_probs"] * actual_batch_size
-
-                # 强制确保所有指标长度与batch大小一致
-                reward_extra_info = self._ensure_consistent_lengths(reward_extra_info, base_reward_tensor.shape[0])
+                # 回退到原始LogicRL
+                reward_extra_info["hvr_applied"] = False
+                reward_extra_info["hvr_fallback_reason"] = "no_rollout_log_probs"
 
                 if return_dict:
                     return {
@@ -166,88 +134,6 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
 
             # 完全回退到父类
             return super().__call__(data, return_dict)
-
-    def _is_validation_phase(self, data):
-        """
-        检测是否为验证阶段
-
-        验证阶段的特征：
-        1. 通常batch size较小且固定
-        2. 可能缺少某些训练时的字段
-        3. 数据结构可能略有不同
-        """
-        batch_size = 0
-        if "responses" in data.batch:
-            batch_size = data.batch["responses"].shape[0]
-
-        has_rollout_log_probs = "rollout_log_probs" in data.batch
-
-        if is_main_process():
-            print(f"🔍 [HVR Manager] 验证检测: batch_size={batch_size}, has_rollout_log_probs={has_rollout_log_probs}")
-
-        # 更严格的验证检测：
-        # 1. 如果没有rollout_log_probs，很可能是验证阶段
-        if not has_rollout_log_probs:
-            if is_main_process():
-                print("🔍 [HVR Manager] 检测原因: 缺少rollout_log_probs")
-            return True
-
-        # 2. 如果batch size很小（<= 4），可能是验证阶段
-        if batch_size <= 4:
-            if is_main_process():
-                print(f"🔍 [HVR Manager] 检测原因: batch_size太小 ({batch_size})")
-            return True
-
-        # 3. 如果batch size是10（从错误信息看），很可能是验证阶段
-        if batch_size == 10:
-            if is_main_process():
-                print(f"🔍 [HVR Manager] 检测原因: batch_size=10 (典型验证大小)")
-            return True
-
-        return False
-
-    def _ensure_consistent_lengths(self, extra_info_dict, expected_length):
-        """
-        强制确保所有extra_info字段的长度都与expected_length一致
-
-        这是解决验证阶段长度不匹配问题的根本方案
-        """
-        if is_main_process():
-            print(f"🔧 [HVR Manager] 强制对齐指标长度到 {expected_length}")
-
-        aligned_dict = {}
-        for key, value in extra_info_dict.items():
-            if isinstance(value, list):
-                current_length = len(value)
-                if current_length == expected_length:
-                    # 长度已经正确
-                    aligned_dict[key] = value
-                elif current_length < expected_length:
-                    # 长度不足，用最后一个值或默认值补齐
-                    if current_length > 0:
-                        fill_value = value[-1]  # 用最后一个值补齐
-                    else:
-                        fill_value = 0.0
-
-                    aligned_value = value + [fill_value] * (expected_length - current_length)
-                    aligned_dict[key] = aligned_value
-
-                    if is_main_process():
-                        print(f"🔧 [HVR Manager] 补齐 {key}: {current_length} → {expected_length}")
-                else:
-                    # 长度过长，截断
-                    aligned_dict[key] = value[:expected_length]
-
-                    if is_main_process():
-                        print(f"🔧 [HVR Manager] 截断 {key}: {current_length} → {expected_length}")
-            else:
-                # 非列表值，转换为列表
-                aligned_dict[key] = [value] * expected_length
-
-                if is_main_process():
-                    print(f"🔧 [HVR Manager] 转换 {key}: 标量 → 长度{expected_length}的列表")
-
-        return aligned_dict
 
     def _apply_hvr_to_rewards(self, data, base_reward_tensor, logits):
         """
@@ -301,32 +187,21 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         # 6. 聚合HVR指标
         aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
 
-        # 7. 构建额外信息 (确保所有值都是列表格式)
-        # 使用实际的batch大小，而不是group_returns的长度
-        actual_batch_size = base_reward_tensor.shape[0]
+        # 7. 构建额外信息
         hvr_extra_info = {
-            "hvr_applied": [True] * actual_batch_size,
-            "hvr_group_return_mean": [mean_return] * actual_batch_size,
-            "hvr_group_return_std": [np.std(group_returns)] * actual_batch_size,
-            "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * actual_batch_size,
-            "hvr_grpo_advantage_std": [np.std(grpo_advantages)] * actual_batch_size,
-            "hvr_sparse_rewards": sparse_rewards + [0.0] * (actual_batch_size - len(sparse_rewards)),  # 补齐长度
-            "hvr_alpha": [self.hvr_alpha] * actual_batch_size,
-            "hvr_beta": [self.hvr_beta] * actual_batch_size,
-            "hvr_lambda": [self.hvr_lambda] * actual_batch_size,
+            "hvr_applied": True,
+            "hvr_group_return_mean": mean_return,
+            "hvr_group_return_std": np.std(group_returns),
+            "hvr_grpo_advantage_mean": np.mean(grpo_advantages),
+            "hvr_grpo_advantage_std": np.std(grpo_advantages),
+            "hvr_sparse_rewards": sparse_rewards,
+            "hvr_alpha": self.hvr_alpha,
+            "hvr_beta": self.hvr_beta,
+            "hvr_lambda": self.hvr_lambda,
         }
 
-        # 8. 添加HVR指标 (转换为列表格式)
-        for key, value in aggregated_metrics.items():
-            if key.startswith('hvr/r_final_dist_'):
-                # 分布统计指标：将计数值分配给每个样本
-                hvr_extra_info[key] = [float(value)] * actual_batch_size
-            elif isinstance(value, (int, float, np.number)):
-                # 普通数值指标：重复actual_batch_size次
-                hvr_extra_info[key] = [float(value)] * actual_batch_size
-            else:
-                # 其他类型保持不变
-                hvr_extra_info[key] = value
+        # 8. 添加HVR指标
+        hvr_extra_info.update(aggregated_metrics)
 
         # 9. 记录指标历史
         self.hvr_metrics_history.append(aggregated_metrics)
@@ -336,6 +211,18 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             print(f"   组平均回报: {mean_return:.4f}")
             print(f"   GRPO优势范围: [{min(grpo_advantages):.4f}, {max(grpo_advantages):.4f}]")
             print(f"   HVR成功率: {aggregated_metrics.get('hvr/success_rate', 0):.2f}")
+
+            # 🎯 HVR专属指标简洁输出
+            print("🎯 [HVR指标]", end=" ")
+            key_metrics = [
+                f"ERVF均值:{aggregated_metrics.get('hvr/ervf_value_mean', 0):.3f}",
+                f"熵均值:{aggregated_metrics.get('hvr/entropy_mean', 0):.3f}",
+                f"奖励均值:{aggregated_metrics.get('hvr/reward_mean', 0):.3f}",
+                f"α={self.hvr_alpha}",
+                f"β={self.hvr_beta}",
+                f"λ={self.hvr_lambda}"
+            ]
+            print(" | ".join(key_metrics))
 
         return hvr_reward_tensor, hvr_extra_info
 
@@ -355,8 +242,6 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         sparse_rewards = self._extract_sparse_rewards_from_tensor(base_reward_tensor)
 
         if is_main_process():
-            print(f"🔍 [HVR Manager] base_reward_tensor形状: {base_reward_tensor.shape}")
-            print(f"🔍 [HVR Manager] 提取的稀疏奖励数量: {len(sparse_rewards)}")
             print(f"🔍 [HVR Manager] 稀疏奖励分布: {dict(zip(*np.unique(sparse_rewards, return_counts=True)))}")
 
         # 2. 准备组数据 (使用log_probs而不是logits)
@@ -390,46 +275,25 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             if len(valid_positions) > 0:
                 hvr_reward_tensor[i, valid_positions] = seq_advantage
 
-        # 6. 聚合HVR指标 (使用安全的聚合方式)
-        try:
-            aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
-        except Exception as e:
-            if is_main_process():
-                print(f"⚠️ [HVR Manager] 指标聚合失败: {e}，使用简化指标")
-            # 使用简化的指标格式
-            aggregated_metrics = {
-                'hvr/success_rate': hvr_metrics['successful_count'] / hvr_metrics['total_count'],
-                'hvr/total_sequences': hvr_metrics['total_count'],
-                'hvr/successful_sequences': hvr_metrics['successful_count'],
-            }
+        # 6. 聚合HVR指标
+        aggregated_metrics = aggregate_hvr_metrics_dict(hvr_metrics)
 
-        # 7. 构建额外信息 (确保所有值都是列表格式)
-        # 使用实际的batch大小，而不是group_returns的长度
-        actual_batch_size = base_reward_tensor.shape[0]
+        # 7. 构建额外信息
         hvr_extra_info = {
-            "hvr_applied": [True] * actual_batch_size,
-            "hvr_method": ["logprobs_based"] * actual_batch_size,
-            "hvr_group_return_mean": [mean_return] * actual_batch_size,
-            "hvr_group_return_std": [np.std(group_returns)] * actual_batch_size,
-            "hvr_grpo_advantage_mean": [np.mean(grpo_advantages)] * actual_batch_size,
-            "hvr_grpo_advantage_std": [np.std(grpo_advantages)] * actual_batch_size,
-            "hvr_sparse_rewards": sparse_rewards + [0.0] * (actual_batch_size - len(sparse_rewards)),  # 补齐长度
-            "hvr_alpha": [self.hvr_alpha] * actual_batch_size,
-            "hvr_beta": [self.hvr_beta] * actual_batch_size,
-            "hvr_lambda": [self.hvr_lambda] * actual_batch_size,
+            "hvr_applied": True,
+            "hvr_method": "logprobs_based",
+            "hvr_group_return_mean": mean_return,
+            "hvr_group_return_std": np.std(group_returns),
+            "hvr_grpo_advantage_mean": np.mean(grpo_advantages),
+            "hvr_grpo_advantage_std": np.std(grpo_advantages),
+            "hvr_sparse_rewards": sparse_rewards,
+            "hvr_alpha": self.hvr_alpha,
+            "hvr_beta": self.hvr_beta,
+            "hvr_lambda": self.hvr_lambda,
         }
 
-        # 8. 添加HVR指标 (转换为列表格式)
-        for key, value in aggregated_metrics.items():
-            if key.startswith('hvr/r_final_dist_'):
-                # 分布统计指标：将计数值分配给每个样本
-                hvr_extra_info[key] = [float(value)] * actual_batch_size
-            elif isinstance(value, (int, float, np.number)):
-                # 普通数值指标：重复actual_batch_size次
-                hvr_extra_info[key] = [float(value)] * actual_batch_size
-            else:
-                # 其他类型保持不变
-                hvr_extra_info[key] = value
+        # 8. 添加HVR指标
+        hvr_extra_info.update(aggregated_metrics)
 
         # 9. 记录指标历史
         self.hvr_metrics_history.append(aggregated_metrics)
@@ -439,6 +303,18 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             print(f"   组平均回报: {mean_return:.4f}")
             print(f"   GRPO优势范围: [{min(grpo_advantages):.4f}, {max(grpo_advantages):.4f}]")
             print(f"   HVR成功率: {aggregated_metrics.get('hvr/success_rate', 0):.2f}")
+
+            # 🎯 HVR专属指标简洁输出
+            print("🎯 [HVR指标]", end=" ")
+            key_metrics = [
+                f"ERVF均值:{aggregated_metrics.get('hvr/ervf_value_mean', 0):.3f}",
+                f"熵均值:{aggregated_metrics.get('hvr/entropy_mean', 0):.3f}",
+                f"奖励均值:{aggregated_metrics.get('hvr/reward_mean', 0):.3f}",
+                f"α={self.hvr_alpha}",
+                f"β={self.hvr_beta}",
+                f"λ={self.hvr_lambda}"
+            ]
+            print(" | ".join(key_metrics))
 
         return hvr_reward_tensor, hvr_extra_info
 
@@ -489,9 +365,8 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         """
         group_returns = []
         hvr_metrics = {
-            'ervf_values': [],      # 兼容aggregate_hvr_metrics_dict
-            'entropies': [],        # 兼容aggregate_hvr_metrics_dict
-            'hvr_rewards': [],      # 兼容aggregate_hvr_metrics_dict
+            'log_prob_values': [],
+            'hvr_rewards': [],
             'r_finals': [],
             'v_targets': [],
             'sequence_lengths': [],
@@ -544,9 +419,8 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 total_return = sum(r_hvr_list)
                 group_returns.append(total_return)
 
-                # 收集指标 (兼容aggregate_hvr_metrics_dict格式)
-                hvr_metrics['ervf_values'].extend(v_proxy_list[:-1])  # 使用v_proxy作为ERVF代理
-                hvr_metrics['entropies'].extend([0.0] * sequence_length)  # 简化版没有熵计算
+                # 收集指标
+                hvr_metrics['log_prob_values'].extend([lp.item() for lp in log_probs])
                 hvr_metrics['hvr_rewards'].extend(r_hvr_list)
                 hvr_metrics['r_finals'].append(r_final)
                 hvr_metrics['v_targets'].append(V_target)
