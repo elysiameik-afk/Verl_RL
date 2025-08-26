@@ -68,12 +68,6 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         print(f"�1️⃣ [HVR Manager] __call__ 被调用! return_dict={return_dict}")
         print(f"�1️⃣ [HVR Manager] 输入数据keys: {list(data.batch.keys())}")
 
-        # 🔧 检查是否为验证阶段，如果是则回退到LogicRL
-        is_validation = self._is_validation_phase(data)
-        if is_validation:
-            print(f"🔍1️⃣ [HVR Manager] 检测到验证阶段，回退到LogicRL避免指标冲突")
-            return super().__call__(data, return_dict)
-
         if is_main_process():
             print("🎯 [HVR Manager] 开始HVR奖励计算")
 
