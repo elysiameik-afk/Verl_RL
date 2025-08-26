@@ -22,6 +22,7 @@ import logging
 import os
 from typing import Tuple
 
+import numpy as np
 import torch
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -612,7 +613,53 @@ class DataParallelPPOActor(BasePPOActor):
                 grad_norm = self._optimizer_step()
                 data = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, data)
+
+        # 🎯 提取HVR指标并记录到WandB
+        self._extract_and_record_hvr_metrics(data, metrics)
+
         self.actor_optimizer.zero_grad()
         return metrics
+
+    def _extract_and_record_hvr_metrics(self, data, metrics):
+        """从data中提取HVR指标并记录到metrics"""
+        if hasattr(data, 'non_tensor_batch') and data.non_tensor_batch:
+            hvr_metrics = {}
+            for key, values in data.non_tensor_batch.items():
+                # 只处理HVR相关的指标
+                if key.startswith('hvr') or 'hvr' in key.lower():
+                    try:
+                        # 将numpy数组转换为标量值
+                        if isinstance(values, np.ndarray) and values.size > 0:
+                            # 对于数值类型，计算均值
+                            if np.issubdtype(values.dtype, np.number):
+                                hvr_metrics[key] = float(np.mean(values))
+                            else:
+                                # 对于非数值类型，取第一个值
+                                hvr_metrics[key] = values[0] if len(values) > 0 else 0
+                        elif isinstance(values, (list, tuple)) and len(values) > 0:
+                            # 处理列表类型
+                            if isinstance(values[0], (int, float)):
+                                hvr_metrics[key] = float(np.mean(values))
+                            else:
+                                hvr_metrics[key] = values[0]
+                    except Exception as e:
+                        # 如果处理失败，记录错误但不中断
+                        print(f"⚠️ [HVR Actor] 处理指标 {key} 失败: {e}")
+                        continue
+
+            # 使用append_to_dict将HVR指标添加到metrics中
+            if hvr_metrics:
+                append_to_dict(metrics, hvr_metrics)
+                print(f"✅ [HVR Actor] 成功记录 {len(hvr_metrics)} 个HVR指标到WandB")
+                # 打印关键指标
+                key_metrics = []
+                if 'hvr/ervf_value_mean' in hvr_metrics:
+                    key_metrics.append(f"ERVF={hvr_metrics['hvr/ervf_value_mean']:.3f}")
+                if 'hvr/entropy_mean' in hvr_metrics:
+                    key_metrics.append(f"熵={hvr_metrics['hvr/entropy_mean']:.3f}")
+                if 'hvr/reward_mean' in hvr_metrics:
+                    key_metrics.append(f"奖励={hvr_metrics['hvr/reward_mean']:.3f}")
+                if key_metrics:
+                    print(f"🎯 [HVR Actor] {' | '.join(key_metrics)}")
 
 # HVR相关方法已移除 - 现在由HVR Manager处理
