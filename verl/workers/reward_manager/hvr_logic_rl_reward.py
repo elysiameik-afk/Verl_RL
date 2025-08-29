@@ -62,6 +62,7 @@ def calculate_ervf_value_lite(log_probs_sequence: torch.Tensor, alpha: float, be
     Returns:
         V_ervf: 内生价值标量
     """
+    print("成功使用内生奖励。")
     # 1. 基础价值：平均log概率（模型confidence）
     base_value = alpha * torch.mean(log_probs_sequence)
 
