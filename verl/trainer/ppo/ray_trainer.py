@@ -1035,6 +1035,33 @@ class RayPPOTrainer:
                         else:
                             reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
+                            # 处理HVR指标：提取→记录→清空，避免数据分块问题
+                            if reward_extra_infos_dict:
+                                hvr_metrics = {}
+                                # 提取HVR相关指标
+                                for key, value in list(reward_extra_infos_dict.items()):
+                                    if key.startswith('rewards/'):  # HVR指标前缀
+                                        hvr_metrics[key] = value
+
+                                # 如果提取到HVR指标，记录并清空
+                                if hvr_metrics:
+                                    print(f"📊 [HVR指标] 提取到 {len(hvr_metrics)} 个HVR指标:")
+                                    for key, value in hvr_metrics.items():
+                                        print(f"📊 [HVR指标]   {key}: {value}")
+
+                                    # 添加到trainer的metrics中，供wandb记录
+                                    metrics.update(hvr_metrics)
+
+                                    # 清空reward_extra_infos_dict中的HVR指标，避免数据分块问题
+                                    for key in hvr_metrics.keys():
+                                        reward_extra_infos_dict.pop(key, None)
+
+                                    print("🔧 [HVR指标] 已清空reward_extra_infos_dict中的HVR指标，避免数据分块问题")
+
+                                # 如果reward_extra_infos_dict为空，设为None以保持兼容性
+                                if not reward_extra_infos_dict:
+                                    reward_extra_infos_dict = None
+
                         if "rollout_log_probs" in batch.batch.keys():
                             # TODO: we may want to add diff of probs too.
                             rollout_old_log_probs = batch.batch["rollout_log_probs"]
