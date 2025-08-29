@@ -373,9 +373,9 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 response_ids = responses[idx]
                 response_str = self.tokenizer.decode(response_ids, skip_special_tokens=True)
 
-                # 计算外部奖励 (复用LogicRL逻辑)
-                data_source = data.non_tensor_batch.get(self.reward_fn_key, ["unknown"])[idx]
-                ground_truth = data.non_tensor_batch.get("ground_truth", [""])[idx]
+                # 计算外部奖励 (复用LogicRL逻辑，使用正确的数据路径)
+                data_source = data.non_tensor_batch[self.reward_fn_key][idx]
+                ground_truth = data.non_tensor_batch["reward_model"]["ground_truth"][idx]
 
                 compute_score_fn = _select_rm_score_fn(data_source)
                 external_score = compute_score_fn(response_str, ground_truth)
