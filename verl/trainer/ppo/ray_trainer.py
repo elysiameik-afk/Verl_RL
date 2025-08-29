@@ -1000,23 +1000,29 @@ class RayPPOTrainer:
 
                         # 调试：检查union前后的数据结构
                         print("🔍 [Union调试] union前 non_tensor_batch keys:", list(batch.non_tensor_batch.keys()))
-                        if "reward_model" in batch.non_tensor_batch:
-                            try:
-                                print("🔍 [Union调试] union前 ground_truth类型:", type(batch.non_tensor_batch["reward_model"]["ground_truth"]))
-                                print("🔍 [Union调试] union前 ground_truth内容:", batch.non_tensor_batch["reward_model"]["ground_truth"])
-                            except Exception as e:
-                                print("🔍 [Union调试] union前 ground_truth访问失败:", e)
+
+                        # 检查union前每个字段的详细信息
+                        for key, val in batch.non_tensor_batch.items():
+                            val_type = type(val)
+                            val_shape = getattr(val, 'shape', 'N/A')
+                            val_len = len(val) if hasattr(val, '__len__') else 'N/A'
+                            print(f"🔍 [Union调试] union前 {key}: 类型={val_type}, 形状={val_shape}, 长度={val_len}")
 
                         # Merge old_log_prob into batch for HVR reward manager
                         batch = batch.union(old_log_prob)
 
                         print("🔍 [Union调试] union后 non_tensor_batch keys:", list(batch.non_tensor_batch.keys()))
-                        if "reward_model" in batch.non_tensor_batch:
-                            try:
-                                print("🔍 [Union调试] union后 ground_truth类型:", type(batch.non_tensor_batch["reward_model"]["ground_truth"]))
-                                print("🔍 [Union调试] union后 ground_truth内容:", batch.non_tensor_batch["reward_model"]["ground_truth"])
-                            except Exception as e:
-                                print("🔍 [Union调试] union后 ground_truth访问失败:", e)
+
+                        # 检查union后每个字段的详细信息
+                        for key, val in batch.non_tensor_batch.items():
+                            val_type = type(val)
+                            val_shape = getattr(val, 'shape', 'N/A')
+                            val_len = len(val) if hasattr(val, '__len__') else 'N/A'
+                            print(f"🔍 [Union调试] union后 {key}: 类型={val_type}, 形状={val_shape}, 长度={val_len}")
+
+                            # 检查是否有形状异常的字段
+                            if hasattr(val, 'shape') and len(getattr(val, 'shape', [])) == 0:
+                                print(f"⚠️  [Union警告] {key} 的形状为空: {val}")
 
                     # compute reward (now with old_log_probs available for HVR)
                     with _timer("reward", timing_raw):
@@ -1129,6 +1135,22 @@ class RayPPOTrainer:
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
                         with _timer("update_actor", timing_raw):
+                            # 调试：检查传递给update_actor的数据
+                            print("🔍 [Update Actor调试] 开始检查batch数据结构")
+                            print(f"🔍 [Update Actor调试] batch.batch keys: {list(batch.batch.keys())}")
+                            print(f"🔍 [Update Actor调试] batch.non_tensor_batch keys: {list(batch.non_tensor_batch.keys())}")
+
+                            # 检查每个non_tensor_batch字段的详细信息
+                            for key, val in batch.non_tensor_batch.items():
+                                val_type = type(val)
+                                val_shape = getattr(val, 'shape', 'N/A')
+                                val_len = len(val) if hasattr(val, '__len__') else 'N/A'
+                                print(f"🔍 [Update Actor调试] {key}: 类型={val_type}, 形状={val_shape}, 长度={val_len}")
+
+                                # 特别检查可能有问题的字段
+                                if hasattr(val, 'shape') and len(getattr(val, 'shape', [])) == 0:
+                                    print(f"⚠️  [Update Actor警告] {key} 的形状为空: {val}")
+
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
