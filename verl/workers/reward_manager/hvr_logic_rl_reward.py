@@ -385,9 +385,11 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 # 计算外部奖励 (适配实际数据结构)
                 data_source = data.non_tensor_batch[self.reward_fn_key][idx]
 
-                # reward_model是numpy数组，直接作为ground_truth
-                ground_truth = data.non_tensor_batch["reward_model"][idx]
-                print(f"🔍 [调试] 提取的ground_truth: {ground_truth}, 类型: {type(ground_truth)}")
+                # reward_model是numpy数组，包含嵌套字典
+                reward_model_item = data.non_tensor_batch["reward_model"][idx]
+                # 提取真正的ground_truth（嵌套在字典中）
+                ground_truth = reward_model_item['ground_truth']
+                print(f"🔍 [调试] 最终ground_truth: {ground_truth}, 类型: {type(ground_truth)}")
 
                 compute_score_fn = _select_rm_score_fn(data_source)
                 external_score = compute_score_fn(response_str, ground_truth)
