@@ -414,23 +414,39 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             )
             
             # 将HVR奖励分配到token级别
-            for i, (data_item, hvr_return) in enumerate(zip(group_data, hvr_returns)):
+            for data_item in group_data:
                 idx = data_item['index']
 
-                # 调试：检查hvr_return的详细信息
+                # 正确获取HVR奖励：从字典中根据索引获取奖励列表
+                hvr_reward_list = hvr_returns[idx]  # 这是稠密奖励列表
+
+                # 调试：检查hvr_reward_list的详细信息
                 print(f"🔍 [HVR分配调试] idx={idx}")
-                print(f"🔍 [HVR分配调试] hvr_return类型={type(hvr_return)}")
-                print(f"🔍 [HVR分配调试] hvr_return值={hvr_return}")
+                print(f"🔍 [HVR分配调试] hvr_reward_list类型={type(hvr_reward_list)}")
+                print(f"🔍 [HVR分配调试] hvr_reward_list长度={len(hvr_reward_list) if hasattr(hvr_reward_list, '__len__') else 'N/A'}")
 
-                if hasattr(hvr_return, '__iter__') and not isinstance(hvr_return, str):
-                    print(f"🔍 [HVR分配调试] hvr_return是可迭代的，长度={len(hvr_return)}")
-                    if len(hvr_return) > 0:
-                        print(f"🔍 [HVR分配调试] hvr_return范围: min={min(hvr_return)}, max={max(hvr_return)}, mean={sum(hvr_return)/len(hvr_return)}")
+                if hasattr(hvr_reward_list, '__iter__') and not isinstance(hvr_reward_list, str):
+                    if len(hvr_reward_list) > 0:
+                        print(f"🔍 [HVR分配调试] hvr_reward_list范围: min={min(hvr_reward_list):.4f}, max={max(hvr_reward_list):.4f}, mean={sum(hvr_reward_list)/len(hvr_reward_list):.4f}")
+
+                        # 将稠密奖励分配到对应的token位置
+                        response_length = len(hvr_reward_list)
+                        total_length = reward_tensor.shape[1]  # 总序列长度
+
+                        # 确保不超出边界
+                        if response_length <= total_length:
+                            # 分配到最后response_length个位置（response部分）
+                            reward_tensor[idx, -response_length:] = torch.tensor(hvr_reward_list, dtype=torch.float32)
+                            print(f"🔍 [HVR分配调试] 分配稠密奖励到token位置: 最后{response_length}个位置")
+                        else:
+                            # 如果HVR奖励长度超出，截断或填充
+                            print(f"⚠️ [HVR警告] HVR奖励长度({response_length})超出序列长度({total_length})，进行截断")
+                            truncated_rewards = hvr_reward_list[-total_length:]
+                            reward_tensor[idx, :] = torch.tensor(truncated_rewards, dtype=torch.float32)
                 else:
-                    print(f"🔍 [HVR分配调试] hvr_return是标量值: {hvr_return}")
-
-                # 将序列级奖励复制到所有token (保持与原LogicRL一致)
-                reward_tensor[idx, :] = hvr_return
+                    print(f"🔍 [HVR分配调试] hvr_reward_list不是列表: {hvr_reward_list}")
+                    # 如果不是列表，作为标量处理
+                    reward_tensor[idx, :] = float(hvr_reward_list)
 
                 # 检查分配后的结果
                 print(f"🔍 [HVR分配调试] reward_tensor[{idx}]统计: min={reward_tensor[idx].min():.4f}, max={reward_tensor[idx].max():.4f}, mean={reward_tensor[idx].mean():.4f}")
