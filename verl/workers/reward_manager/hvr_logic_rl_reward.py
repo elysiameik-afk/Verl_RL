@@ -87,11 +87,21 @@ def calculate_hvr_rewards_for_group_lite(
     lambda_hvr: float = 0.5,
     use_zscore: bool = True,
     target_scale: float = 3.0
-) -> Dict[int, List[float]]:
+) -> Tuple[Dict[int, List[float]], Dict[str, Any]]:
     """
     内存友好版本：基于old_log_probs计算HVR奖励
     """
     hvr_rewards = {}
+
+    # 收集指标用于wandb记录
+    metrics = {
+        'v_ervf_values': [],
+        'v_target_values': [],
+        'v_hvr_values': [],
+        'raw_returns': [],
+        'r_final_values': [],
+        'external_scores': []
+    }
 
     for item in group_data:
         log_probs = item['log_probs']  # (seq_len,)
@@ -126,6 +136,12 @@ def calculate_hvr_rewards_for_group_lite(
         V_hvr_list = [(1.0 - lambda_hvr) * v.item() + lambda_hvr * V_target
                       for v in V_ervf_normalized]
 
+        # 收集指标
+        metrics['v_ervf_values'].extend([v.item() for v in V_ervf_normalized])
+        metrics['v_target_values'].append(V_target)
+        metrics['v_hvr_values'].extend(V_hvr_list)
+        metrics['external_scores'].append(external_score)
+
         # 4. 分解为稠密奖励
         r_hvr_list = []
         for t in range(len(V_hvr_list) - 1):
@@ -140,7 +156,27 @@ def calculate_hvr_rewards_for_group_lite(
 
         hvr_rewards[index] = r_hvr_list
 
-    return hvr_rewards
+        # 收集最终奖励指标
+        metrics['raw_returns'].extend(r_hvr_list)
+        metrics['r_final_values'].append(external_score)
+
+    # 计算汇总指标
+    final_returns = []
+    for rewards_list in hvr_rewards.values():
+        final_returns.extend(rewards_list)
+
+    summary_metrics = {
+        'v_ervf_mean': np.mean(metrics['v_ervf_values']) if metrics['v_ervf_values'] else 0.0,
+        'v_target_mean': np.mean(metrics['v_target_values']) if metrics['v_target_values'] else 0.0,
+        'v_hvr_mean': np.mean(metrics['v_hvr_values']) if metrics['v_hvr_values'] else 0.0,
+        'raw_return_mean': np.mean(metrics['raw_returns']) if metrics['raw_returns'] else 0.0,
+        'raw_return_std': np.std(metrics['raw_returns']) if metrics['raw_returns'] else 0.0,
+        'final_return_mean': np.mean(final_returns) if final_returns else 0.0,
+        'r_final_mean': np.mean(metrics['r_final_values']) if metrics['r_final_values'] else 0.0,
+        'external_score_mean': np.mean(metrics['external_scores']) if metrics['external_scores'] else 0.0,
+    }
+
+    return hvr_rewards, summary_metrics
 
 
 def calculate_hvr_rewards_for_group(
@@ -347,11 +383,10 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 })
 
             # 应用HVR算法（内存友好版本）
-            hvr_returns = calculate_hvr_rewards_for_group_lite(
+            hvr_returns, hvr_metrics = calculate_hvr_rewards_for_group_lite(
                 group_data, self.alpha, self.beta, self.lambda_hvr,
                 self.use_zscore, self.target_scale
             )
-            hvr_metrics = {}  # 简化版本暂时不返回详细metrics
 
             # 将HVR奖励分配到token级别
             for i, (data_item, hvr_return) in enumerate(zip(group_data, hvr_returns)):
