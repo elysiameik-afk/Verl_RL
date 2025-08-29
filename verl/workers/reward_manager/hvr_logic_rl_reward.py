@@ -412,12 +412,29 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 group_data, self.alpha, self.beta, self.lambda_hvr,
                 self.use_zscore, self.target_scale
             )
-
+            
             # 将HVR奖励分配到token级别
             for i, (data_item, hvr_return) in enumerate(zip(group_data, hvr_returns)):
                 idx = data_item['index']
+
+                # 调试：检查hvr_return的详细信息
+                print(f"🔍 [HVR分配调试] idx={idx}")
+                print(f"🔍 [HVR分配调试] hvr_return类型={type(hvr_return)}")
+                print(f"🔍 [HVR分配调试] hvr_return值={hvr_return}")
+
+                if hasattr(hvr_return, '__iter__') and not isinstance(hvr_return, str):
+                    print(f"🔍 [HVR分配调试] hvr_return是可迭代的，长度={len(hvr_return)}")
+                    if len(hvr_return) > 0:
+                        print(f"🔍 [HVR分配调试] hvr_return范围: min={min(hvr_return)}, max={max(hvr_return)}, mean={sum(hvr_return)/len(hvr_return)}")
+                else:
+                    print(f"🔍 [HVR分配调试] hvr_return是标量值: {hvr_return}")
+
                 # 将序列级奖励复制到所有token (保持与原LogicRL一致)
                 reward_tensor[idx, :] = hvr_return
+
+                # 检查分配后的结果
+                print(f"🔍 [HVR分配调试] reward_tensor[{idx}]统计: min={reward_tensor[idx].min():.4f}, max={reward_tensor[idx].max():.4f}, mean={reward_tensor[idx].mean():.4f}")
+                print("---")
 
             # 收集指标
             for key, value in hvr_metrics.items():
@@ -434,6 +451,13 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         # 打印关键指标
         print(f"🎉 [HVR完成] 总共成功处理 {hvr_success_count} 个样本")
         print(f"🎉 [HVR完成] reward_tensor形状: {reward_tensor.shape}")
+
+        # 关键调试：检查最终reward_tensor的统计信息
+        print(f"🔍 [HVR最终] reward_tensor整体统计:")
+        print(f"🔍 [HVR最终]   min={reward_tensor.min():.4f}")
+        print(f"🔍 [HVR最终]   max={reward_tensor.max():.4f}")
+        print(f"🔍 [HVR最终]   mean={reward_tensor.mean():.4f}")
+        print(f"🔍 [HVR最终]   std={reward_tensor.std():.4f}")
 
         if final_metrics:
             print(f"🎯 [HVR指标] V_ervf_mean: {final_metrics.get('rewards/v_ervf_mean', 0):.4f}")
