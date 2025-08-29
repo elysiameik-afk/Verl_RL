@@ -538,7 +538,7 @@ class ActorRolloutRefWorker(MegatronWorker):
         return_logits = data.meta_info.get("return_logits", False)
 
         if return_logits:
-            output, entropys, logits = self.actor.compute_log_prob(data=data, calculate_entropy=True, return_logits=True)
+            output, entropys, logits = self.actor.compute_log_prob(data=data, calculate_entropy=True)
             tensor_dict = {"old_log_probs": output, "entropys": entropys, "logits": logits}
         else:
             output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)

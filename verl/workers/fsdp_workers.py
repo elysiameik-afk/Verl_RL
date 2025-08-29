@@ -645,7 +645,7 @@ class ActorRolloutRefWorker(Worker):
         return output
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def compute_log_prob(self, data: DataProto, return_logits=False):
+    def compute_log_prob(self, data: DataProto):
         # when is_lora is True, we use the actor without lora applied to calculate the log_prob
         # which is mostly used for ref log_prob calculation
         assert self._is_actor
@@ -672,7 +672,7 @@ class ActorRolloutRefWorker(Worker):
             data = self.ulysses_sharding_manager.preprocess_data(data)
             with adapter_ctx:
                 if return_logits:
-                    output, entropys, logits = self.actor.compute_log_prob(data=data, calculate_entropy=True, return_logits=True)
+                    output, entropys, logits = self.actor.compute_log_prob(data=data, calculate_entropy=True)
                     tensor_dict = {"old_log_probs": output, "entropys": entropys, "logits": logits}
                 else:
                     output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
