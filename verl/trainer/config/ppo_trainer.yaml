@@ -711,7 +711,24 @@ reward_model:
   # Reward Manager. This defines the mechanism of computing rule-based reward and handling different reward sources.
   # Default is naive. If all verification functions are multiprocessing-safe,
   # the reward manager can be set to prime for parallel verification.
+  # For HVR (Hybrid Value Reshaping), use hvr_logic_rl
   reward_manager: naive
+
+  # HVR (Hybrid Value Reshaping) parameters - only effective when reward_manager=hvr_logic_rl
+  # Temperature coefficient for ERVF (Endogenous Reward Value Function)
+  alpha: 1.0
+
+  # Entropy penalty weight for ERVF
+  beta: 0.1
+
+  # HVR mixing factor (0.0 = pure ERVF, 1.0 = pure external reward)
+  lambda_hvr: 0.5
+
+  # Whether to use Z-score normalization for numerical stability
+  use_zscore: true
+
+  # Target standard deviation after Z-score normalization
+  target_scale: 3.0
 
   # Whether to launch custom reward function asynchronously during log_prob
   launch_reward_fn_async: False

@@ -48,6 +48,6 @@ python3 -m verl.trainer.main_ppo \
     reward_model.alpha=1.0 \
     reward_model.beta=0.1 \
     reward_model.lambda_hvr=0.5 \
-    reward_model.use_zscore=True \
+    reward_model.use_zscore=true \
     reward_model.target_scale=3.0 \
     #$@

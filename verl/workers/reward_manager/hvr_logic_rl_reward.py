@@ -181,19 +181,18 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
     4. 输出包含HVR信息的奖励张量
     """
 
-    def __init__(self, tokenizer, num_examine, reward_fn_key="data_source",
-                 alpha=1.0, beta=0.1, lambda_hvr=0.5, use_zscore=True, target_scale=3.0, **kwargs):
+    def __init__(self, tokenizer, num_examine, reward_fn_key="data_source", **kwargs):
         super().__init__(tokenizer, num_examine, reward_fn_key, **kwargs)
 
-        # HVR超参数
-        self.alpha = alpha
-        self.beta = beta
-        self.lambda_hvr = lambda_hvr
-        self.use_zscore = use_zscore
-        self.target_scale = target_scale
+        # HVR超参数 - 从kwargs中获取，提供默认值
+        self.alpha = kwargs.get('alpha', 1.0)
+        self.beta = kwargs.get('beta', 0.1)
+        self.lambda_hvr = kwargs.get('lambda_hvr', 0.5)
+        self.use_zscore = kwargs.get('use_zscore', True)
+        self.target_scale = kwargs.get('target_scale', 3.0)
 
-        print(f"🎯 [HVR初始化] alpha={alpha}, beta={beta}, lambda_hvr={lambda_hvr}")
-        print(f"🎯 [HVR初始化] use_zscore={use_zscore}, target_scale={target_scale}")
+        print(f"🎯 [HVR初始化] alpha={self.alpha}, beta={self.beta}, lambda_hvr={self.lambda_hvr}")
+        print(f"🎯 [HVR初始化] use_zscore={self.use_zscore}, target_scale={self.target_scale}")
 
     def __call__(self, data: DataProto, return_dict: bool = False):
         """
