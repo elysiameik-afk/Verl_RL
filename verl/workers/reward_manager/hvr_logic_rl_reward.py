@@ -379,20 +379,15 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 print(f"🔍 [调试] non_tensor_batch keys: {list(data.non_tensor_batch.keys())}")
 
                 if "reward_model" in data.non_tensor_batch:
-                    print(f"🔍 [调试] reward_model keys: {list(data.non_tensor_batch['reward_model'].keys())}")
-                    print(f"🔍 [调试] ground_truth类型: {type(data.non_tensor_batch['reward_model']['ground_truth'])}")
-                    print(f"🔍 [调试] ground_truth长度: {len(data.non_tensor_batch['reward_model']['ground_truth']) if hasattr(data.non_tensor_batch['reward_model']['ground_truth'], '__len__') else 'N/A'}")
+                    print(f"🔍 [调试] reward_model类型: {type(data.non_tensor_batch['reward_model'])}")
+                    print(f"🔍 [调试] reward_model内容: {data.non_tensor_batch['reward_model']}")
 
-                # 计算外部奖励 (使用更安全的访问方式)
-                try:
-                    data_source = data.non_tensor_batch[self.reward_fn_key][idx]
-                    ground_truth = data.non_tensor_batch["reward_model"]["ground_truth"][idx]
-                except (IndexError, TypeError) as e:
-                    print(f"🔍 [调试] 索引访问失败: {e}")
-                    # 尝试直接访问（可能是单个值而不是列表）
-                    data_source = data.non_tensor_batch[self.reward_fn_key]
-                    ground_truth = data.non_tensor_batch["reward_model"]["ground_truth"]
-                    print(f"🔍 [调试] 直接访问 - data_source类型: {type(data_source)}, ground_truth类型: {type(ground_truth)}")
+                # 计算外部奖励 (适配实际数据结构)
+                data_source = data.non_tensor_batch[self.reward_fn_key][idx]
+
+                # reward_model是numpy数组，直接作为ground_truth
+                ground_truth = data.non_tensor_batch["reward_model"][idx]
+                print(f"🔍 [调试] 提取的ground_truth: {ground_truth}, 类型: {type(ground_truth)}")
 
                 compute_score_fn = _select_rm_score_fn(data_source)
                 external_score = compute_score_fn(response_str, ground_truth)
