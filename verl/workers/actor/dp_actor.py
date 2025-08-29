@@ -271,86 +271,22 @@ class DataParallelPPOActor(BasePPOActor):
 
     def _forward_micro_batch_with_logits(self, micro_batch, temperature, calculate_entropy=False):
         """
-        扩展版本的_forward_micro_batch，额外返回logits用于HVR
+        内存友好版本 - 不计算logits，HVR使用old_log_probs实现
 
         Returns:
             entropy: (bs, response_len)
             log_probs: (bs, response_len)
-            logits: (bs, response_len, vocab_size)
+            logits: None (HVR使用old_log_probs替代)
         """
-        response_length = micro_batch["responses"].size(-1)
-        multi_modal_inputs = {}
-        if "multi_modal_inputs" in micro_batch.keys():
-            for key in micro_batch["multi_modal_inputs"][0].keys():
-                multi_modal_inputs[key] = torch.cat([inputs[key] for inputs in micro_batch["multi_modal_inputs"]], dim=0)
+        print("🔧 [HVR] 使用内存友好版本，基于old_log_probs实现HVR")
 
-        with torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
-            input_ids = micro_batch["input_ids"]
-            attention_mask = micro_batch["attention_mask"]
-            position_ids = micro_batch["position_ids"]
-            entropy = None
+        # 调用原版方法获取基本结果，完全不计算logits
+        entropy, log_probs = self._forward_micro_batch(micro_batch, temperature, calculate_entropy)
 
-            if position_ids.dim() == 3:  # qwen2vl mrope
-                position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
+        # 返回None作为logits，HVR将使用old_log_probs实现
+        logits = None
 
-            # 处理不同的配置情况
-            if not self.use_remove_padding:
-                # 标准情况：不使用remove_padding
-                extra_args = {}
-                if self.use_fused_kernels:
-                    extra_args["temperature"] = temperature
-
-                output = self.actor_module(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    **multi_modal_inputs,
-                    use_cache=False,
-                    **extra_args,
-                )
-
-                if self.use_fused_kernels:
-                    # 使用fused kernels的情况
-                    log_probs = output.log_probs[:, -response_length - 1 : -1]
-                    if calculate_entropy:
-                        entropy = output.entropy[:, -response_length - 1 : -1]
-
-                    # 尝试获取logits
-                    if hasattr(output, 'logits') and output.logits is not None:
-                        logits = output.logits[:, -response_length - 1 : -1, :]
-                        # 注意：fused kernels可能已经应用了temperature
-                    else:
-                        # 如果fused kernels没有提供logits，我们需要重新前向传播
-                        print("⚠️  [HVR] Fused kernels未提供logits，重新计算...")
-                        # 临时禁用fused kernels重新计算
-                        output_raw = self.actor_module(
-                            input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            position_ids=position_ids,
-                            **multi_modal_inputs,
-                            use_cache=False,
-                        )
-                        logits = output_raw.logits[:, -response_length - 1 : -1, :]
-                        logits = logits / temperature
-                else:
-                    # 不使用fused kernels的情况
-                    logits = output.logits
-                    logits = logits[:, -response_length - 1 : -1, :]  # 选择response部分
-                    logits = logits / temperature  # 应用温度缩放
-
-                    # 计算log_probs和entropy
-                    log_probs = logprobs_from_logits(logits, micro_batch["responses"])
-                    if calculate_entropy:
-                        entropy = verl_F.entropy_from_logits(logits)
-            else:
-                # 使用remove_padding的情况 - 暂时不支持HVR以避免内存问题
-                print("⚠️  [HVR] Remove padding模式暂不支持HVR，跳过logits计算")
-                # 调用原方法获取基本结果
-                entropy, log_probs = self._forward_micro_batch(micro_batch, temperature, calculate_entropy)
-                # 直接返回None，避免内存问题
-                logits = None
-
-            return entropy, log_probs, logits
+        return entropy, log_probs, logits
 
     def _optimizer_step(self):
         assert self.config.grad_clip is not None

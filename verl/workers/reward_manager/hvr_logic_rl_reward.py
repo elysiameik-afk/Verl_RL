@@ -49,6 +49,100 @@ def calculate_ervf_value(logits: torch.Tensor, alpha: float, beta: float) -> flo
     return V_ervf.item()
 
 
+def calculate_ervf_value_lite(log_probs_sequence: torch.Tensor, alpha: float, beta: float) -> float:
+    """
+    计算简化版ERVF (Entropy-Regularized Value Function) 内生价值
+    基于old_log_probs的内存友好实现
+
+    Args:
+        log_probs_sequence: (seq_len,) - 序列的log概率
+        alpha: 温度参数，控制价值函数的平滑度
+        beta: 熵正则化系数，控制探索程度
+
+    Returns:
+        V_ervf: 内生价值标量
+    """
+    # 1. 基础价值：平均log概率（模型confidence）
+    base_value = alpha * torch.mean(log_probs_sequence)
+
+    # 2. 不确定性估计：log概率的方差（模型犹豫程度）
+    uncertainty = torch.var(log_probs_sequence)
+
+    # 3. 位置相关性：考虑序列位置的重要性
+    seq_len = len(log_probs_sequence)
+    position_weights = torch.linspace(0.5, 1.0, seq_len)  # 后面的token更重要
+    weighted_log_probs = log_probs_sequence * position_weights
+    position_value = alpha * torch.mean(weighted_log_probs)
+
+    # 4. 简化ERVF公式：V_ervf = α * (base_value + position_value) - β * uncertainty
+    V_ervf = 0.7 * base_value + 0.3 * position_value - beta * uncertainty
+
+    return V_ervf.item()
+
+
+def calculate_hvr_rewards_for_group_lite(
+    group_data: List[Dict],
+    alpha: float = 1.0,
+    beta: float = 0.1,
+    lambda_hvr: float = 0.5,
+    use_zscore: bool = True,
+    target_scale: float = 3.0
+) -> Dict[int, List[float]]:
+    """
+    内存友好版本：基于old_log_probs计算HVR奖励
+    """
+    hvr_rewards = {}
+
+    for item in group_data:
+        log_probs = item['log_probs']  # (seq_len,)
+        response_ids = item['ids']
+        external_score = item['external_score']
+        index = item['index']
+
+        # 1. 计算简化ERVF价值轨迹
+        V_ervf_list = []
+        seq_len = len(log_probs)
+
+        for t in range(seq_len):
+            # 使用滑动窗口计算局部ERVF
+            window_start = max(0, t - 2)
+            window_end = min(seq_len, t + 3)
+            window_log_probs = log_probs[window_start:window_end]
+
+            V_ervf = calculate_ervf_value_lite(window_log_probs, alpha, beta)
+            V_ervf_list.append(V_ervf)
+
+        # 2. Z-score归一化
+        if len(V_ervf_list) > 1 and use_zscore:
+            V_ervf_tensor = torch.tensor(V_ervf_list)
+            V_ervf_mean = V_ervf_tensor.mean()
+            V_ervf_std = V_ervf_tensor.std() + 1e-8
+            V_ervf_normalized = (V_ervf_tensor - V_ervf_mean) / V_ervf_std * target_scale
+        else:
+            V_ervf_normalized = torch.tensor(V_ervf_list)
+
+        # 3. 价值重塑
+        V_target = external_score * 0.3
+        V_hvr_list = [(1.0 - lambda_hvr) * v.item() + lambda_hvr * V_target
+                      for v in V_ervf_normalized]
+
+        # 4. 分解为稠密奖励
+        r_hvr_list = []
+        for t in range(len(V_hvr_list) - 1):
+            log_prob_t = log_probs[t].item()
+            r_hvr_t = alpha * log_prob_t + V_hvr_list[t] - V_hvr_list[t+1]
+            r_hvr_t = torch.clamp(torch.tensor(r_hvr_t), min=-2.0, max=2.0).item()
+            r_hvr_list.append(r_hvr_t)
+
+        # 最后一个位置的奖励
+        if len(V_hvr_list) > 0:
+            r_hvr_list.append(V_hvr_list[-1])
+
+        hvr_rewards[index] = r_hvr_list
+
+    return hvr_rewards
+
+
 def calculate_hvr_rewards_for_group(
     group_data: List[Dict],
     alpha: float = 1.0,
@@ -198,10 +292,12 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         """
         主要接口：计算HVR奖励
         """
-        # 检查是否有logits数据
-        if "logits" not in data.batch.keys() or data.batch["logits"] is None:
-            print("⚠️  [HVR警告] 未找到logits数据或logits为None，回退到原始LogicRL")
+        # 检查是否有old_log_probs数据（内存友好版本）
+        if "old_log_probs" not in data.batch.keys():
+            print("⚠️  [HVR警告] 未找到old_log_probs数据，回退到原始LogicRL")
             return super().__call__(data, return_dict)
+
+        print("🎯 [HVR] 使用内存友好版本，基于old_log_probs计算HVR奖励")
 
         # 如果已有rm_scores，直接返回
         if "rm_scores" in data.batch.keys():
@@ -210,14 +306,12 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             else:
                 return data.batch["rm_scores"]
 
-        print("🎯 [HVR] 开始计算混合价值重塑奖励...")
-
         # 初始化
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         all_hvr_metrics = {}
 
-        # 获取基础数据
-        logits = data.batch["logits"]  # (batch_size, seq_len, vocab_size)
+        # 获取基础数据（内存友好版本）
+        old_log_probs = data.batch["old_log_probs"]  # (batch_size, seq_len)
         responses = data.batch["responses"]  # (batch_size, seq_len)
 
         # 按UID分组处理
@@ -242,21 +336,22 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 compute_score_fn = _select_rm_score_fn(data_source)
                 external_score = compute_score_fn(response_str, ground_truth)
 
-                # 准备HVR数据
-                response_logits = logits[idx]  # (seq_len, vocab_size)
+                # 准备HVR数据（内存友好版本）
+                response_log_probs = old_log_probs[idx]  # (seq_len,)
                 group_data.append({
-                    'logits': response_logits,
+                    'log_probs': response_log_probs,
                     'ids': response_ids,
                     'r_final': external_score,
                     'external_score': external_score,
                     'index': idx
                 })
 
-            # 应用HVR算法
-            hvr_returns, hvr_metrics = calculate_hvr_rewards_for_group(
+            # 应用HVR算法（内存友好版本）
+            hvr_returns = calculate_hvr_rewards_for_group_lite(
                 group_data, self.alpha, self.beta, self.lambda_hvr,
                 self.use_zscore, self.target_scale
             )
+            hvr_metrics = {}  # 简化版本暂时不返回详细metrics
 
             # 将HVR奖励分配到token级别
             for i, (data_item, hvr_return) in enumerate(zip(group_data, hvr_returns)):
