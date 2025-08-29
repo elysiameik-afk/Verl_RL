@@ -108,12 +108,15 @@ class DataParallelPPOActor(BasePPOActor):
             print(f"🎯 [创新点配置] EMA={self.use_ema_smoothing}, 梯度自适应={self.use_gradient_adaptive_weighting}, AMIC={self.use_amic}")
             print(f"🎯 [创新点配置] PTRW={self.use_ptrw}, 时序衰减={self.use_temporal_decay}, 非对称裁剪={self.use_asymmetric_clipping}")
 
-    def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False, return_logits=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
             entropy: # (bs, response_len)
             log_probs: # (bs, response_len)
+            logits: # (bs, response_len, vocab_size) - only if return_logits=True
         """
+        if return_logits:
+            return self._forward_micro_batch_with_logits(micro_batch, temperature, calculate_entropy)
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
@@ -266,13 +269,14 @@ class DataParallelPPOActor(BasePPOActor):
 
             return entropy, log_probs
 
-    def _forward_micro_batch_with_logits(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _forward_micro_batch_with_logits(self, micro_batch, temperature, calculate_entropy=False):
         """
         扩展版本的_forward_micro_batch，额外返回logits用于HVR
+
         Returns:
-            entropy: # (bs, response_len)
-            log_probs: # (bs, response_len)
-            logits: # (bs, response_len, vocab_size)
+            entropy: (bs, response_len)
+            log_probs: (bs, response_len)
+            logits: (bs, response_len, vocab_size)
         """
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
@@ -282,18 +286,20 @@ class DataParallelPPOActor(BasePPOActor):
 
         with torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
             input_ids = micro_batch["input_ids"]
-            batch_size, seqlen = input_ids.shape
             attention_mask = micro_batch["attention_mask"]
             position_ids = micro_batch["position_ids"]
             entropy = None
+
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
 
-            # 简化版本：只处理非remove_padding的情况，用于HVR
+            # 处理不同的配置情况
             if not self.use_remove_padding:
+                # 标准情况：不使用remove_padding
                 extra_args = {}
                 if self.use_fused_kernels:
                     extra_args["temperature"] = temperature
+
                 output = self.actor_module(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -304,21 +310,61 @@ class DataParallelPPOActor(BasePPOActor):
                 )
 
                 if self.use_fused_kernels:
+                    # 使用fused kernels的情况
                     log_probs = output.log_probs[:, -response_length - 1 : -1]
-                    entropy = output.entropy[:, -response_length - 1 : -1]  # (bsz, response_length)
-                    # 对于fused kernels，我们无法获取原始logits，返回None
-                    logits = None
+                    if calculate_entropy:
+                        entropy = output.entropy[:, -response_length - 1 : -1]
+
+                    # 尝试获取logits
+                    if hasattr(output, 'logits') and output.logits is not None:
+                        logits = output.logits[:, -response_length - 1 : -1, :]
+                        # 注意：fused kernels可能已经应用了temperature
+                    else:
+                        # 如果fused kernels没有提供logits，我们需要重新前向传播
+                        print("⚠️  [HVR] Fused kernels未提供logits，重新计算...")
+                        # 临时禁用fused kernels重新计算
+                        output_raw = self.actor_module(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            **multi_modal_inputs,
+                            use_cache=False,
+                        )
+                        logits = output_raw.logits[:, -response_length - 1 : -1, :]
+                        logits = logits / temperature
                 else:
+                    # 不使用fused kernels的情况
                     logits = output.logits
-                    logits.div_(temperature)
-                    logits = logits[:, -response_length - 1 : -1, :]  # (bsz, response_length, vocab_size)
+                    logits = logits[:, -response_length - 1 : -1, :]  # 选择response部分
+                    logits = logits / temperature  # 应用温度缩放
+
+                    # 计算log_probs和entropy
                     log_probs = logprobs_from_logits(logits, micro_batch["responses"])
                     if calculate_entropy:
-                        entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
+                        entropy = verl_F.entropy_from_logits(logits)
             else:
-                # 对于remove_padding的情况，暂时不支持HVR
+                # 使用remove_padding的情况 - 需要特殊处理
+                print("⚠️  [HVR] Remove padding模式下的logits提取可能不完整")
+                # 先调用原方法获取基本结果
                 entropy, log_probs = self._forward_micro_batch(micro_batch, temperature, calculate_entropy)
-                logits = None
+
+                # 尝试重新前向传播获取logits
+                try:
+                    output = self.actor_module(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        **multi_modal_inputs,
+                        use_cache=False,
+                    )
+                    if hasattr(output, 'logits') and output.logits is not None:
+                        logits = output.logits[:, -response_length - 1 : -1, :]
+                        logits = logits / temperature
+                    else:
+                        logits = None
+                except Exception as e:
+                    print(f"⚠️  [HVR] Remove padding模式下logits获取失败: {e}")
+                    logits = None
 
             return entropy, log_probs, logits
 
@@ -341,7 +387,7 @@ class DataParallelPPOActor(BasePPOActor):
         return grad_norm
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
-    def compute_log_prob(self, data: DataProto, calculate_entropy=False) -> torch.Tensor:
+    def compute_log_prob(self, data: DataProto, calculate_entropy=False, return_logits=False) -> torch.Tensor:
         """Compute the log probability of the responses given input_ids, attention_mask and position_ids
 
         Args:
@@ -383,26 +429,39 @@ class DataParallelPPOActor(BasePPOActor):
 
         log_probs_lst = []
         entropy_lst = []
+        logits_lst = []
         for micro_batch in micro_batches:
             if isinstance(micro_batch, DataProto):
                 micro_batch = {**micro_batch.batch, **micro_batch.non_tensor_batch}
             with torch.no_grad():
-                entropy, log_probs = self._forward_micro_batch(micro_batch, temperature=temperature, calculate_entropy=calculate_entropy)
+                if return_logits:
+                    entropy, log_probs, logits = self._forward_micro_batch(micro_batch, temperature=temperature, calculate_entropy=calculate_entropy, return_logits=return_logits)
+                    logits_lst.append(logits)
+                else:
+                    entropy, log_probs = self._forward_micro_batch(micro_batch, temperature=temperature, calculate_entropy=calculate_entropy)
             log_probs_lst.append(log_probs)
             if calculate_entropy:
                 entropy_lst.append(entropy)
 
         log_probs = torch.concat(log_probs_lst, dim=0)
         entropys = None
+        logits = None
         if calculate_entropy:
             entropys = torch.concat(entropy_lst, dim=0)
+        if return_logits:
+            logits = torch.concat(logits_lst, dim=0)
         if use_dynamic_bsz:
             indices = list(itertools.chain.from_iterable(indices))
             assert len(indices) == log_probs.size(0), f"{len(indices)} vs. {log_probs.size()}"
             revert_indices = torch.tensor(get_reverse_idx(indices), dtype=torch.long)
             log_probs = log_probs[revert_indices]
+            if return_logits:
+                logits = logits[revert_indices]
 
-        return log_probs, entropys
+        if return_logits:
+            return log_probs, entropys, logits
+        else:
+            return log_probs, entropys
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
     def update_policy(self, data: DataProto):

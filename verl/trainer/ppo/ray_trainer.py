@@ -993,7 +993,14 @@ class RayPPOTrainer:
 
                     # recompute old_log_probs
                     with _timer("old_log_prob", timing_raw):
-                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+                        # Check if we need logits for HVR reward manager
+                        need_logits = self.config.reward_model.get("reward_manager") == "hvr_logic_rl"
+
+                        if need_logits:
+                            old_log_prob = self.actor_rollout_wg.compute_log_prob(batch, return_logits=True)
+                        else:
+                            old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode

@@ -180,7 +180,7 @@ class MegatronPPOActor(BasePPOActor):
         self.config = config
 
     @GPUMemoryLogger(role="megatron actor", logger=logger)
-    def compute_log_prob(self, data: DataProto, calculate_entropy=False) -> torch.Tensor:
+    def compute_log_prob(self, data: DataProto, calculate_entropy=False, return_logits=False) -> torch.Tensor:
         """Compute the log probability of the responses given input_ids, attention_mask and position_ids
 
         Args:
@@ -212,13 +212,21 @@ class MegatronPPOActor(BasePPOActor):
             response = data["responses"]
             response_length = response.size(1)
             log_probs = output["log_probs"][:, -response_length - 1 : -1].contiguous()
-            return {"log_probs": log_probs}
+            result = {"log_probs": log_probs}
+
+            # 如果需要logits，也提取logits
+            if return_logits and "logits" in output:
+                logits = output["logits"][:, -response_length - 1 : -1, :].contiguous()
+                result["logits"] = logits
+
+            return result
 
         # We make recompute_old_log_prob by default here.
         # TODO (zhangchi.usc1992): actually, this function should only return log_prob and this logic should be handled by user outside
         recompute_old_log_prob = self.config.get("recompute_old_log_prob", True)
 
         entropys = torch.Tensor()
+        logits = None
         if recompute_old_log_prob:
             select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
             batch = data.select(batch_keys=select_keys).batch
@@ -232,17 +240,30 @@ class MegatronPPOActor(BasePPOActor):
                     # only on last rank. It should be on every tp rank
                     if calculate_entropy:
                         log_probs = [o[0]["log_probs"] for o in output["output"]]  # (bs, seq_size)
+                        if return_logits:
+                            logits = [o[0]["logits"] for o in output["output"] if "logits" in o[0]]  # (bs, seq_size, vocab_size)
                     else:
                         log_probs = [o["log_probs"] for o in output["output"]]  # (bs, seq_size)
+                        if return_logits:
+                            logits = [o["logits"] for o in output["output"] if "logits" in o]  # (bs, seq_size, vocab_size)
+
                     log_probs = torch.cat(log_probs, dim=0).to(torch.float32)
+                    if return_logits and logits:
+                        logits = torch.cat(logits, dim=0).to(torch.float32)
+
                     if use_dynamic_bsz:
                         indices = output["indices"]
                         indices = list(itertools.chain.from_iterable(indices))
                         assert len(indices) == log_probs.size(0), f"{len(indices)} vs. {log_probs.size()}"
                         revert_indices = torch.tensor(get_reverse_idx(indices), dtype=torch.long)
                         log_probs = log_probs[revert_indices]
+                        if return_logits and logits is not None:
+                            logits = logits[revert_indices]
                 else:
                     log_probs = torch.empty(size=(batch_size, response_length), dtype=torch.float32, device=input_ids.device)
+                    if return_logits:
+                        # 需要获取vocab_size，这里先设为None，后续广播时会处理
+                        logits = None
 
                 # broadcast across pp ranks
                 torch.distributed.broadcast(
@@ -251,6 +272,21 @@ class MegatronPPOActor(BasePPOActor):
                     group=mpu.get_pipeline_model_parallel_group(),
                     async_op=False,
                 )
+
+                # broadcast logits if needed
+                if return_logits:
+                    if logits is None:
+                        # 在非最后stage创建空的logits张量用于接收广播
+                        # 这里需要知道vocab_size，暂时设为一个合理的默认值
+                        vocab_size = getattr(self.actor_module, 'vocab_size', 32000)  # 默认vocab_size
+                        logits = torch.empty(size=(batch_size, response_length, vocab_size), dtype=torch.float32, device=input_ids.device)
+
+                    torch.distributed.broadcast(
+                        tensor=logits,
+                        src=mpu.get_pipeline_model_parallel_last_rank(),
+                        group=mpu.get_pipeline_model_parallel_group(),
+                        async_op=False,
+                    )
                 if calculate_entropy:
                     # Note that o[0] is metrics, o[1] is entropy
                     if mpu.is_pipeline_last_stage(ignore_virtual=True):
@@ -275,7 +311,10 @@ class MegatronPPOActor(BasePPOActor):
         # add empty cache after each compute
         torch.cuda.empty_cache()
 
-        return log_probs, entropys
+        if return_logits:
+            return log_probs, entropys, logits
+        else:
+            return log_probs, entropys
 
     def make_minibatch_iterator(self, data: DataProto) -> Iterable[DataProto]:
         """Make minibatch iterator for updating the actor

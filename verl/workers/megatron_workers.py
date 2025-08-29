@@ -522,7 +522,7 @@ class ActorRolloutRefWorker(MegatronWorker):
 
     @register(dispatch_mode=Dispatch.MEGATRON_COMPUTE_PROTO)
     @GPUMemoryLogger(role="compute_log_prob", logger=logger)
-    def compute_log_prob(self, data: DataProto):
+    def compute_log_prob(self, data: DataProto, return_logits=False):
         assert self._is_actor
         if self._is_offload_param:
             load_megatron_model_to_gpu(self.actor_module, load_grad=False)
@@ -533,8 +533,15 @@ class ActorRolloutRefWorker(MegatronWorker):
         data.meta_info["use_dynamic_bsz"] = self.config.rollout.log_prob_use_dynamic_bsz
         data.meta_info["temperature"] = self.config.rollout.temperature
         data = data.to(torch.cuda.current_device())
-        output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
-        output = DataProto.from_dict(tensors={"old_log_probs": output, "entropys": entropys}, meta_info={"temperature": self.config.rollout.temperature})
+
+        if return_logits:
+            output, entropys, logits = self.actor.compute_log_prob(data=data, calculate_entropy=True, return_logits=True)
+            tensor_dict = {"old_log_probs": output, "entropys": entropys, "logits": logits}
+        else:
+            output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
+            tensor_dict = {"old_log_probs": output, "entropys": entropys}
+
+        output = DataProto.from_dict(tensors=tensor_dict, meta_info={"temperature": self.config.rollout.temperature})
         output = output.to("cpu")
         # clear kv cache
         if self._is_offload_param:
