@@ -331,6 +331,7 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         """
         # 检查是否有old_log_probs数据（内存友好版本）
         if "old_log_probs" not in data.batch.keys():
+            print("训练回退")
             print("⚠️  [HVR警告] 未找到old_log_probs数据，回退到原始LogicRL")
             return super().__call__(data, return_dict)
 
