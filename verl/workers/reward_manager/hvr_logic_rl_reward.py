@@ -330,7 +330,7 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         主要接口：计算HVR奖励
         """
         # 调试信息：检查数据结构
-        print(f"🔍 [HVR调试] data.batch.keys(): {list(data.batch.keys())}")
+        # print(f"🔍 [HVR调试] data.batch.keys(): {list(data.batch.keys())}")
         print(f"🔍 [HVR调试] data.meta_info: {data.meta_info}")
         if hasattr(data, 'non_tensor_batch') and data.non_tensor_batch:
             print(f"🔍 [HVR调试] data.non_tensor_batch.keys(): {list(data.non_tensor_batch.keys())}")
@@ -342,6 +342,7 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
             return super().__call__(data, return_dict)
 
         print("🎯 [HVR] 使用内存友好版本，基于old_log_probs计算HVR奖励")
+        hvr_success_count = 0
 
         # 如果已有rm_scores，直接返回
         if "rm_scores" in data.batch.keys():
@@ -393,6 +394,8 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
 
                 compute_score_fn = _select_rm_score_fn(data_source)
                 external_score = compute_score_fn(response_str, ground_truth)
+                hvr_success_count += 1
+                print(f"✅ [HVR成功] 第{hvr_success_count}个样本计算完成，外部分数: {external_score}")
 
                 # 准备HVR数据（内存友好版本）
                 response_log_probs = old_log_probs[idx]  # (seq_len,)
@@ -429,6 +432,9 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 final_metrics[f"rewards/{key}"] = np.mean(values)
 
         # 打印关键指标
+        print(f"🎉 [HVR完成] 总共成功处理 {hvr_success_count} 个样本")
+        print(f"🎉 [HVR完成] reward_tensor形状: {reward_tensor.shape}")
+
         if final_metrics:
             print(f"🎯 [HVR指标] V_ervf_mean: {final_metrics.get('rewards/v_ervf_mean', 0):.4f}")
             print(f"🎯 [HVR指标] V_target_mean: {final_metrics.get('rewards/v_target_mean', 0):.4f}")
