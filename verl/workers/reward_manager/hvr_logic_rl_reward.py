@@ -93,7 +93,7 @@ def calculate_hvr_rewards_for_group_lite(
     内存友好版本：基于old_log_probs计算HVR奖励
     """
     hvr_rewards = {}
-
+    print("训练成功")
     # 收集指标用于wandb记录
     metrics = {
         'v_ervf_values': [],
@@ -329,6 +329,12 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         """
         主要接口：计算HVR奖励
         """
+        # 调试信息：检查数据结构
+        print(f"🔍 [HVR调试] data.batch.keys(): {list(data.batch.keys())}")
+        print(f"🔍 [HVR调试] data.meta_info: {data.meta_info}")
+        if hasattr(data, 'non_tensor_batch') and data.non_tensor_batch:
+            print(f"🔍 [HVR调试] data.non_tensor_batch.keys(): {list(data.non_tensor_batch.keys())}")
+
         # 检查是否有old_log_probs数据（内存友好版本）
         if "old_log_probs" not in data.batch.keys():
             print("训练回退")

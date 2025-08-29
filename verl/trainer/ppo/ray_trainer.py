@@ -980,18 +980,7 @@ class RayPPOTrainer:
                     # compute global_valid tokens
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
-                    with _timer("reward", timing_raw):
-                        # compute reward model score
-                        if self.use_rm:
-                            reward_tensor = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(reward_tensor)
-
-                        if self.config.reward_model.launch_reward_fn_async:
-                            future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
-                        else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
-
-                    # recompute old_log_probs
+                    # recompute old_log_probs (moved before reward computation for HVR)
                     with _timer("old_log_prob", timing_raw):
                         # Check if we need logits for HVR reward manager
                         need_logits = self.config.reward_model.get("reward_manager") == "hvr_logic_rl"
@@ -1008,7 +997,20 @@ class RayPPOTrainer:
                         old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
                         metrics.update(old_log_prob_metrics)
                         old_log_prob.batch.pop("entropys")
+
+                        # Merge old_log_prob into batch for HVR reward manager
                         batch = batch.union(old_log_prob)
+
+                    # compute reward (now with old_log_probs available for HVR)
+                    with _timer("reward", timing_raw):
+                        if self.use_rm:
+                            reward_tensor = self.rm_wg.compute_rm_score(batch)
+                            batch = batch.union(reward_tensor)
+
+                        if self.config.reward_model.launch_reward_fn_async:
+                            future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
+                        else:
+                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
                         if "rollout_log_probs" in batch.batch.keys():
                             # TODO: we may want to add diff of probs too.
