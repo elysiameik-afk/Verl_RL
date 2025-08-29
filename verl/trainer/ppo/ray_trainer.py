@@ -1001,14 +1001,22 @@ class RayPPOTrainer:
                         # 调试：检查union前后的数据结构
                         print("🔍 [Union调试] union前 non_tensor_batch keys:", list(batch.non_tensor_batch.keys()))
                         if "reward_model" in batch.non_tensor_batch:
-                            print("🔍 [Union调试] union前 ground_truth类型:", type(batch.non_tensor_batch["reward_model"]["ground_truth"]))
+                            try:
+                                print("🔍 [Union调试] union前 ground_truth类型:", type(batch.non_tensor_batch["reward_model"]["ground_truth"]))
+                                print("🔍 [Union调试] union前 ground_truth内容:", batch.non_tensor_batch["reward_model"]["ground_truth"])
+                            except Exception as e:
+                                print("🔍 [Union调试] union前 ground_truth访问失败:", e)
 
                         # Merge old_log_prob into batch for HVR reward manager
                         batch = batch.union(old_log_prob)
 
                         print("🔍 [Union调试] union后 non_tensor_batch keys:", list(batch.non_tensor_batch.keys()))
                         if "reward_model" in batch.non_tensor_batch:
-                            print("🔍 [Union调试] union后 ground_truth类型:", type(batch.non_tensor_batch["reward_model"]["ground_truth"]))
+                            try:
+                                print("🔍 [Union调试] union后 ground_truth类型:", type(batch.non_tensor_batch["reward_model"]["ground_truth"]))
+                                print("🔍 [Union调试] union后 ground_truth内容:", batch.non_tensor_batch["reward_model"]["ground_truth"])
+                            except Exception as e:
+                                print("🔍 [Union调试] union后 ground_truth访问失败:", e)
 
                     # compute reward (now with old_log_probs available for HVR)
                     with _timer("reward", timing_raw):
