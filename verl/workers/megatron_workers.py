@@ -511,7 +511,11 @@ class ActorRolloutRefWorker(MegatronWorker):
         data.meta_info["use_dynamic_bsz"] = self.config.ref.log_prob_use_dynamic_bsz
         data.meta_info["temperature"] = self.config.rollout.temperature
         data = data.to(torch.cuda.current_device())
-        output, _ = self.ref_policy.compute_log_prob(data=data, calculate_entropy=False)
+        result = self.ref_policy.compute_log_prob(data=data, calculate_entropy=False)
+        if len(result) == 3:
+            output, _, _ = result  # (log_probs, entropy, logits)
+        else:
+            output, _ = result  # (log_probs, entropy)
         output = DataProto.from_dict(tensors={"ref_log_prob": output})
         output = output.to("cpu")
         if self._ref_is_offload_param:

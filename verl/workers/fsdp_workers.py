@@ -684,7 +684,11 @@ class ActorRolloutRefWorker(Worker):
                         output, entropys = result
                         tensor_dict = {"old_log_probs": output, "entropys": entropys}
                 else:
-                    output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
+                    result = self.actor.compute_log_prob(data=data, calculate_entropy=True)
+                    if len(result) == 3:
+                        output, entropys, _ = result  # (log_probs, entropy, logits)
+                    else:
+                        output, entropys = result  # (log_probs, entropy)
                     tensor_dict = {"old_log_probs": output, "entropys": entropys}
             output = DataProto.from_dict(
                 tensors=tensor_dict,
@@ -727,7 +731,11 @@ class ActorRolloutRefWorker(Worker):
         data.meta_info["use_dynamic_bsz"] = self.config.ref.log_prob_use_dynamic_bsz
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
-            output, _ = self.ref_policy.compute_log_prob(data=data, calculate_entropy=False)
+            result = self.ref_policy.compute_log_prob(data=data, calculate_entropy=False)
+            if len(result) == 3:
+                output, _, _ = result  # (log_probs, entropy, logits)
+            else:
+                output, _ = result  # (log_probs, entropy)
             output = DataProto.from_dict(tensors={"ref_log_prob": output})
             output = self.ulysses_sharding_manager.postprocess_data(output)
 
