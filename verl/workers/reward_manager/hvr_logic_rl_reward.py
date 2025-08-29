@@ -373,9 +373,26 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
                 response_ids = responses[idx]
                 response_str = self.tokenizer.decode(response_ids, skip_special_tokens=True)
 
-                # 计算外部奖励 (复用LogicRL逻辑，使用正确的数据路径)
-                data_source = data.non_tensor_batch[self.reward_fn_key][idx]
-                ground_truth = data.non_tensor_batch["reward_model"]["ground_truth"][idx]
+                # 调试：检查数据结构
+                print(f"🔍 [调试] idx类型: {type(idx)}, 值: {idx}")
+                print(f"🔍 [调试] reward_fn_key: {self.reward_fn_key}")
+                print(f"🔍 [调试] non_tensor_batch keys: {list(data.non_tensor_batch.keys())}")
+
+                if "reward_model" in data.non_tensor_batch:
+                    print(f"🔍 [调试] reward_model keys: {list(data.non_tensor_batch['reward_model'].keys())}")
+                    print(f"🔍 [调试] ground_truth类型: {type(data.non_tensor_batch['reward_model']['ground_truth'])}")
+                    print(f"🔍 [调试] ground_truth长度: {len(data.non_tensor_batch['reward_model']['ground_truth']) if hasattr(data.non_tensor_batch['reward_model']['ground_truth'], '__len__') else 'N/A'}")
+
+                # 计算外部奖励 (使用更安全的访问方式)
+                try:
+                    data_source = data.non_tensor_batch[self.reward_fn_key][idx]
+                    ground_truth = data.non_tensor_batch["reward_model"]["ground_truth"][idx]
+                except (IndexError, TypeError) as e:
+                    print(f"🔍 [调试] 索引访问失败: {e}")
+                    # 尝试直接访问（可能是单个值而不是列表）
+                    data_source = data.non_tensor_batch[self.reward_fn_key]
+                    ground_truth = data.non_tensor_batch["reward_model"]["ground_truth"]
+                    print(f"🔍 [调试] 直接访问 - data_source类型: {type(data_source)}, ground_truth类型: {type(ground_truth)}")
 
                 compute_score_fn = _select_rm_score_fn(data_source)
                 external_score = compute_score_fn(response_str, ground_truth)
