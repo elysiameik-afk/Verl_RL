@@ -672,8 +672,17 @@ class ActorRolloutRefWorker(Worker):
             data = self.ulysses_sharding_manager.preprocess_data(data)
             with adapter_ctx:
                 if return_logits:
-                    output, entropys, logits = self.actor.compute_log_prob(data=data, calculate_entropy=True)
-                    tensor_dict = {"old_log_probs": output, "entropys": entropys, "logits": logits}
+                    result = self.actor.compute_log_prob(data=data, calculate_entropy=True)
+                    if len(result) == 3:
+                        output, entropys, logits = result
+                        if logits is not None:
+                            tensor_dict = {"old_log_probs": output, "entropys": entropys, "logits": logits}
+                        else:
+                            print("🔧 [HVR] Logits为None，使用内存友好模式")
+                            tensor_dict = {"old_log_probs": output, "entropys": entropys}
+                    else:
+                        output, entropys = result
+                        tensor_dict = {"old_log_probs": output, "entropys": entropys}
                 else:
                     output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
                     tensor_dict = {"old_log_probs": output, "entropys": entropys}

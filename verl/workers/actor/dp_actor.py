@@ -370,13 +370,19 @@ class DataParallelPPOActor(BasePPOActor):
         if calculate_entropy:
             entropys = torch.concat(entropy_lst, dim=0)
         if return_logits:
-            logits = torch.concat(logits_lst, dim=0)
+            # 检查logits_lst中是否有有效的logits
+            valid_logits = [l for l in logits_lst if l is not None]
+            if valid_logits:
+                logits = torch.concat(valid_logits, dim=0)
+            else:
+                print("🔧 [HVR] 所有logits均为None，使用内存友好模式")
+                logits = None
         if use_dynamic_bsz:
             indices = list(itertools.chain.from_iterable(indices))
             assert len(indices) == log_probs.size(0), f"{len(indices)} vs. {log_probs.size()}"
             revert_indices = torch.tensor(get_reverse_idx(indices), dtype=torch.long)
             log_probs = log_probs[revert_indices]
-            if return_logits:
+            if return_logits and logits is not None:
                 logits = logits[revert_indices]
 
         if return_logits:

@@ -5,8 +5,6 @@ set -x
 # 专门为内存受限环境设计
 
 export VLLM_ATTENTION_BACKEND=XFORMERS
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_LAUNCH_BLOCKING=0
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
