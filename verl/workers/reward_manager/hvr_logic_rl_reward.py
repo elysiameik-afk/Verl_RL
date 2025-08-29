@@ -62,7 +62,7 @@ def calculate_ervf_value_lite(log_probs_sequence: torch.Tensor, alpha: float, be
     Returns:
         V_ervf: 内生价值标量
     """
-    print("成功使用内生奖励。")
+    # print("成功使用内生奖励。")
     # 1. 基础价值：平均log概率（模型confidence）
     base_value = alpha * torch.mean(log_probs_sequence)
 
@@ -93,7 +93,7 @@ def calculate_hvr_rewards_for_group_lite(
     内存友好版本：基于old_log_probs计算HVR奖励
     """
     hvr_rewards = {}
-    print("训练成功")
+    # print("训练成功")
     # 收集指标用于wandb记录
     metrics = {
         'v_ervf_values': [],
