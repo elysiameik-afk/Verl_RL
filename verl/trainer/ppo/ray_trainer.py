@@ -997,9 +997,9 @@ class RayPPOTrainer:
                         need_logits = self.config.reward_model.get("reward_manager") == "hvr_logic_rl"
 
                         if need_logits:
-                            old_log_prob = self.actor_rollout_wg.compute_log_prob(batch, return_logits=True)
-                        else:
-                            old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+                            batch.meta_info["return_logits"] = True
+
+                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
 
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]

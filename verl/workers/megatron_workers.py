@@ -522,7 +522,7 @@ class ActorRolloutRefWorker(MegatronWorker):
 
     @register(dispatch_mode=Dispatch.MEGATRON_COMPUTE_PROTO)
     @GPUMemoryLogger(role="compute_log_prob", logger=logger)
-    def compute_log_prob(self, data: DataProto, return_logits=False):
+    def compute_log_prob(self, data: DataProto):
         assert self._is_actor
         if self._is_offload_param:
             load_megatron_model_to_gpu(self.actor_module, load_grad=False)
@@ -533,6 +533,9 @@ class ActorRolloutRefWorker(MegatronWorker):
         data.meta_info["use_dynamic_bsz"] = self.config.rollout.log_prob_use_dynamic_bsz
         data.meta_info["temperature"] = self.config.rollout.temperature
         data = data.to(torch.cuda.current_device())
+
+        # Check if logits are requested
+        return_logits = data.meta_info.get("return_logits", False)
 
         if return_logits:
             output, entropys, logits = self.actor.compute_log_prob(data=data, calculate_entropy=True, return_logits=True)
