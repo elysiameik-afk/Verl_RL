@@ -199,8 +199,8 @@ class HVRLogicRLRewardManager(LogicRLRewardManager):
         主要接口：计算HVR奖励
         """
         # 检查是否有logits数据
-        if "logits" not in data.batch.keys():
-            print("⚠️  [HVR警告] 未找到logits数据，回退到原始LogicRL")
+        if "logits" not in data.batch.keys() or data.batch["logits"] is None:
+            print("⚠️  [HVR警告] 未找到logits数据或logits为None，回退到原始LogicRL")
             return super().__call__(data, return_dict)
 
         # 如果已有rm_scores，直接返回

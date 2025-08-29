@@ -343,28 +343,12 @@ class DataParallelPPOActor(BasePPOActor):
                     if calculate_entropy:
                         entropy = verl_F.entropy_from_logits(logits)
             else:
-                # 使用remove_padding的情况 - 需要特殊处理
-                print("⚠️  [HVR] Remove padding模式下的logits提取可能不完整")
-                # 先调用原方法获取基本结果
+                # 使用remove_padding的情况 - 暂时不支持HVR以避免内存问题
+                print("⚠️  [HVR] Remove padding模式暂不支持HVR，跳过logits计算")
+                # 调用原方法获取基本结果
                 entropy, log_probs = self._forward_micro_batch(micro_batch, temperature, calculate_entropy)
-
-                # 尝试重新前向传播获取logits
-                try:
-                    output = self.actor_module(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        **multi_modal_inputs,
-                        use_cache=False,
-                    )
-                    if hasattr(output, 'logits') and output.logits is not None:
-                        logits = output.logits[:, -response_length - 1 : -1, :]
-                        logits = logits / temperature
-                    else:
-                        logits = None
-                except Exception as e:
-                    print(f"⚠️  [HVR] Remove padding模式下logits获取失败: {e}")
-                    logits = None
+                # 直接返回None，避免内存问题
+                logits = None
 
             return entropy, log_probs, logits
 
