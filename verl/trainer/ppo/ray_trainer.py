@@ -1001,6 +1001,12 @@ class RayPPOTrainer:
                         old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
                         metrics.update(old_log_prob_metrics)
                         old_log_prob.batch.pop("entropys")
+
+                        # 提取自信度（如果有的话）
+                        confidences = old_log_prob.batch.get("confidences", None)
+                        if confidences is not None:
+                            old_log_prob.batch.pop("confidences")
+
                         batch = batch.union(old_log_prob)
 
                         if "rollout_log_probs" in batch.batch.keys():
@@ -1058,6 +1064,37 @@ class RayPPOTrainer:
                             metrics.update(kl_metrics)
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
+
+                        # 应用自信度缩放（如果启用）
+                        use_confidence_scaling = self.config.algorithm.get("use_confidence_scaling", False)
+                        if use_confidence_scaling and confidences is not None:
+                            with _timer("confidence_scaling", timing_raw):
+                                # 获取当前的token级别奖励
+                                token_level_rewards = batch.batch["token_level_rewards"]  # (batch_size, response_length)
+
+                                # 应用自信度缩放
+                                # confidences: (batch_size,) -> (batch_size, 1) for broadcasting
+                                confidence_scale = confidences.unsqueeze(-1)  # (batch_size, 1)
+                                scaled_rewards = token_level_rewards * confidence_scale  # (batch_size, response_length)
+
+                                # 更新奖励
+                                batch.batch["token_level_rewards"] = scaled_rewards
+
+                                # 记录自信度统计信息
+                                confidence_metrics = {
+                                    "confidence/mean": confidences.mean().item(),
+                                    "confidence/std": confidences.std().item(),
+                                    "confidence/min": confidences.min().item(),
+                                    "confidence/max": confidences.max().item(),
+                                }
+                                metrics.update(confidence_metrics)
+
+                                if torch.distributed.get_rank() == 0:
+                                    print(f"🎯 [自信度缩放] 平均自信度: {confidences.mean().item():.4f}, "
+                                          f"范围: [{confidences.min().item():.4f}, {confidences.max().item():.4f}]")
+                        elif use_confidence_scaling and confidences is None:
+                            if torch.distributed.get_rank() == 0:
+                                print("⚠️  [自信度缩放] 启用了自信度缩放但未获得自信度数据，跳过缩放")
 
                         # compute advantages, executed on the driver process
 

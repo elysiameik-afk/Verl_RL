@@ -96,15 +96,89 @@ class DataParallelPPOActor(BasePPOActor):
         self.clip_ratio_pos = self.config.get("clip_ratio_pos", 0.3)
         self.clip_ratio_neg = self.config.get("clip_ratio_neg", 0.1)
 
+        # Initialize confidence calculation parameters
+        self.lgc_window_size = 256
+        self.lgc_avg_pool = torch.nn.AvgPool1d(kernel_size=self.lgc_window_size, stride=1)
+
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             print(f"🎯 [创新点配置] EMA={self.use_ema_smoothing}, 梯度自适应={self.use_gradient_adaptive_weighting}, AMIC={self.use_amic}")
             print(f"🎯 [创新点配置] PTRW={self.use_ptrw}, 时序衰减={self.use_temporal_decay}, 非对称裁剪={self.use_asymmetric_clipping}")
+            print(f"🎯 [自信度配置] LGC窗口大小={self.lgc_window_size}")
 
-    def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _compute_token_confidence_from_logits(self, logits: torch.Tensor, sampled_tokens: torch.Tensor, top_k: int = 20) -> torch.Tensor:
+        """
+        计算token级别的置信度，使用DeepConf方法：排除实际采样的token，计算剩余top-k token的平均log概率
+
+        Args:
+            logits: 形状 (..., vocab_size)
+            sampled_tokens: 实际采样的token，形状与logits前导维度相同 (...)
+            top_k: 考虑的top token数量，默认20
+
+        Returns:
+            token置信度，形状与logits前导维度相同 (...)
+        """
+        # 计算log概率
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)  # (..., vocab_size)
+
+        # 获取top-k的值和索引
+        top_k_values, top_k_indices = torch.topk(log_probs, k=top_k, dim=-1)  # (..., top_k)
+
+        # 找到实际采样token在top-k中的位置
+        sampled_tokens_expanded = sampled_tokens.unsqueeze(-1)  # (..., 1)
+        mask = (top_k_indices == sampled_tokens_expanded)  # (..., top_k)
+
+        # 创建排除采样token的mask
+        exclude_mask = ~mask  # (..., top_k)
+
+        # 计算排除采样token后的平均log概率
+        # 使用masked_fill将采样token的位置设为很小的值，然后计算平均
+        masked_values = top_k_values.masked_fill(mask, float('-inf'))
+
+        # 计算有效token的数量（应该是top_k-1）
+        valid_count = exclude_mask.sum(dim=-1, keepdim=True).float()  # (..., 1)
+
+        # 计算平均值，排除-inf的值
+        valid_values = masked_values.masked_fill(masked_values == float('-inf'), 0.0)
+        confidence = valid_values.sum(dim=-1) / valid_count.squeeze(-1)  # (...)
+
+        # 取反得到置信度分数（越高越自信）
+        return -confidence
+
+    def _compute_lgc_from_token_confidence(self, token_confidence: torch.Tensor) -> torch.Tensor:
+        """
+        从token置信度计算序列级别的LGC分数
+
+        Args:
+            token_confidence: 形状 (batch_size, response_len)
+
+        Returns:
+            LGC分数，形状 (batch_size,)
+        """
+        batch_size, response_len = token_confidence.shape
+
+        # 边缘情况：如果序列长度小于窗口大小，直接计算平均
+        if response_len < self.lgc_window_size:
+            return token_confidence.mean(dim=-1)  # (batch_size,)
+
+        # 计算组置信度：使用滑动窗口
+        # 增加通道维度用于AvgPool1d
+        token_confidence_expanded = token_confidence.unsqueeze(1)  # (batch_size, 1, response_len)
+
+        # 应用滑动平均池化
+        group_confidence = self.lgc_avg_pool(token_confidence_expanded)  # (batch_size, 1, num_groups)
+        group_confidence = group_confidence.squeeze(1)  # (batch_size, num_groups)
+
+        # 计算LGC：取最小值（最低组置信度）
+        lgc_scores = torch.min(group_confidence, dim=-1).values  # (batch_size,)
+
+        return lgc_scores
+
+    def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False, calculate_confidence=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
-            entropy: # (bs, response_len)
+            entropy: # (bs, response_len) or None
             log_probs: # (bs, response_len)
+            confidence: # (bs,) or None - sequence-level confidence scores
         """
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
@@ -225,6 +299,9 @@ class DataParallelPPOActor(BasePPOActor):
                     seqlen=seqlen,
                 )
 
+                # rmpad情况下不支持自信度计算
+                confidence = None
+
                 # only return response part:
                 if calculate_entropy:
                     entropy = full_entropy.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
@@ -246,6 +323,7 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     log_probs = output.log_probs[:, -response_length - 1 : -1]
                     entropy = output.entropy[:, -response_length - 1 : -1]  # (bsz, response_length)
+                    confidence = None  # fused_kernels不支持自信度计算
 
                 else:
                     logits = output.logits
@@ -256,7 +334,17 @@ class DataParallelPPOActor(BasePPOActor):
                     if calculate_entropy:
                         entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
 
-            return entropy, log_probs
+                    # 计算自信度
+                    confidence = None
+                    if calculate_confidence:
+                        # 计算token级别的置信度
+                        responses = micro_batch["responses"]  # (bsz, response_length)
+                        token_confidence = self._compute_token_confidence_from_logits(logits, responses)  # (bsz, response_length)
+
+                        # 计算序列级别的LGC分数
+                        confidence = self._compute_lgc_from_token_confidence(token_confidence)  # (bsz,)
+
+            return entropy, log_probs, confidence
 
     def _optimizer_step(self):
         assert self.config.grad_clip is not None
@@ -319,26 +407,59 @@ class DataParallelPPOActor(BasePPOActor):
 
         log_probs_lst = []
         entropy_lst = []
+        confidence_lst = []
+
+        # 在compute_log_prob中启用自信度计算
+        calculate_confidence = True
+
         for micro_batch in micro_batches:
             if isinstance(micro_batch, DataProto):
                 micro_batch = {**micro_batch.batch, **micro_batch.non_tensor_batch}
             with torch.no_grad():
-                entropy, log_probs = self._forward_micro_batch(micro_batch, temperature=temperature, calculate_entropy=calculate_entropy)
+                entropy, log_probs, confidence = self._forward_micro_batch(
+                    micro_batch,
+                    temperature=temperature,
+                    calculate_entropy=calculate_entropy,
+                    calculate_confidence=calculate_confidence
+                )
             log_probs_lst.append(log_probs)
             if calculate_entropy:
                 entropy_lst.append(entropy)
+            if calculate_confidence and confidence is not None:
+                confidence_lst.append(confidence)
 
         log_probs = torch.concat(log_probs_lst, dim=0)
         entropys = None
+        confidences = None
+
         if calculate_entropy:
             entropys = torch.concat(entropy_lst, dim=0)
+        if calculate_confidence and confidence_lst:
+            confidences = torch.concat(confidence_lst, dim=0)
+
         if use_dynamic_bsz:
             indices = list(itertools.chain.from_iterable(indices))
             assert len(indices) == log_probs.size(0), f"{len(indices)} vs. {log_probs.size()}"
             revert_indices = torch.tensor(get_reverse_idx(indices), dtype=torch.long)
             log_probs = log_probs[revert_indices]
+            if entropys is not None:
+                entropys = entropys[revert_indices]
+            if confidences is not None:
+                confidences = confidences[revert_indices]
 
-        return log_probs, entropys
+        # 构造返回的DataProto对象
+        tensors = {"old_log_probs": log_probs}
+        if entropys is not None:
+            tensors["entropys"] = entropys
+        if confidences is not None:
+            tensors["confidences"] = confidences
+
+        output = DataProto.from_dict(
+            tensors=tensors,
+            meta_info={"temperature": temperature}
+        )
+
+        return output
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
     def update_policy(self, data: DataProto):
@@ -421,7 +542,13 @@ class DataParallelPPOActor(BasePPOActor):
                     calculate_entropy = False
                     if entropy_coeff != 0:
                         calculate_entropy = True
-                    entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy)
+                    # 在update_policy中不计算自信度
+                    entropy, log_prob, _ = self._forward_micro_batch(
+                        micro_batch=data,
+                        temperature=temperature,
+                        calculate_entropy=calculate_entropy,
+                        calculate_confidence=False
+                    )
 
                     # Use comprehensive innovation-enabled policy loss computation
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, innovation_metrics = compute_policy_loss_with_innovations(
