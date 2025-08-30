@@ -99,7 +99,7 @@ class LogicRLRewardManager:
                 print("[response]", response_str)
                 print("[ground_truth]", ground_truth)
                 print("[score]", score)
-
+        print("kk的score",reward_tensor)
         if return_dict:
             return {
                 "reward_tensor": reward_tensor,
