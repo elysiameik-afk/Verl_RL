@@ -166,8 +166,26 @@ class DataParallelPPOActor(BasePPOActor):
         group_confidence = self.lgc_avg_pool(token_confidence_expanded)  # (batch_size, 1, num_groups)
         group_confidence = group_confidence.squeeze(1)  # (batch_size, num_groups)
 
-        # 计算LGC：取最小值（最低组置信度）
-        lgc_scores = torch.min(group_confidence, dim=-1).values  # (batch_size,)
+        # 计算LGC：使用截尾平均（去掉极值后取平均）
+        sorted_groups = torch.sort(group_confidence, dim=-1)[0]  # (batch_size, num_groups)
+        num_groups = sorted_groups.shape[-1]
+        start_idx = int(num_groups * 0.15)  # 去掉最小15%
+        end_idx = int(num_groups * 0.85)    # 去掉最大15%
+
+        # 如果组数太少，直接取平均
+        if end_idx <= start_idx:
+            lgc_scores = group_confidence.mean(dim=-1)  # (batch_size,)
+        else:
+            lgc_scores = sorted_groups[:, start_idx:end_idx].mean(dim=-1)  # (batch_size,)
+
+        # 调试：检查重复值
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            unique_scores = torch.unique(lgc_scores)
+            if len(unique_scores) < len(lgc_scores) * 0.8:  # 如果80%以上都是重复值
+                print(f"🔍 [自信度调试] 发现大量重复LGC分数!")
+                print(f"🔍 [自信度调试] 唯一值数量: {len(unique_scores)}, 总样本数: {len(lgc_scores)}")
+                print(f"🔍 [自信度调试] 唯一值: {unique_scores[:10]}")  # 只打印前10个
+                print(f"🔍 [自信度调试] response_len={response_len}, lgc_window_size={self.lgc_window_size}")
 
         return lgc_scores
 

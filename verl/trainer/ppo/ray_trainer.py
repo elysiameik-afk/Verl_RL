@@ -1117,6 +1117,18 @@ class RayPPOTrainer:
                                 }
                                 metrics.update(confidence_metrics)
 
+                                # 记录缩放效果统计
+                                original_reward_mean = token_level_rewards.sum(-1).mean().item()
+                                scaled_reward_mean = scaled_rewards.sum(-1).mean().item()
+                                scaling_ratio = scaled_reward_mean / original_reward_mean if original_reward_mean != 0 else 0
+
+                                scaling_metrics = {
+                                    "scaling/original_reward_mean": original_reward_mean,
+                                    "scaling/scaled_reward_mean": scaled_reward_mean,
+                                    "scaling/ratio": scaling_ratio,
+                                }
+                                metrics.update(scaling_metrics)
+
                                 if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
                                     print(f"🎯 [自信度缩放] 平均自信度: {confidences.mean().item():.4f}, "
                                           f"范围: [{confidences.min().item():.4f}, {confidences.max().item():.4f}]")
