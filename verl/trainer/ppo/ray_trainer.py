@@ -1000,6 +1000,8 @@ class RayPPOTrainer:
 
                     # recompute old_log_probs
                     with _timer("old_log_prob", timing_raw):
+                        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                            print(f"🔍 [训练调试] 正在调用 compute_log_prob，步数={self.global_steps}")
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
