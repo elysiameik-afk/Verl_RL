@@ -354,8 +354,16 @@ class ActorRolloutRefWorker(MegatronWorker):
                 log_gpu_memory_usage("After offload actor optimizer during init", logger=logger)
 
         if self._is_actor:
+            # 传递algorithm配置给actor
+            actor_config = self.config.actor
+            if hasattr(self.config, 'algorithm'):
+                from omegaconf import OmegaConf, open_dict
+                OmegaConf.set_struct(actor_config, True)
+                with open_dict(actor_config):
+                    actor_config.algorithm = self.config.algorithm
+
             self.actor = MegatronPPOActor(
-                config=self.config.actor,
+                config=actor_config,
                 model_config=self.actor_model_config,
                 hf_config=self.hf_config,
                 tf_config=self.tf_config,

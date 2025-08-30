@@ -13,7 +13,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_batch_size=8 \
     data.max_prompt_length=4096 \
     data.max_response_length=2048 \
-    actor_rollout_ref.model.path=/root/autodl-tmp/myverl/mymodels/qwen3-0.6b \
+    actor_rollout_ref.model.path=/root/autodl-tmp/verldev/Verl_RL/mymodels/qwen3-0.6b \
     actor_rollout_ref.actor.optim.lr=3e-6 \
     actor_rollout_ref.model.use_remove_padding=False \
     actor_rollout_ref.model.use_fused_kernels=False \
@@ -36,14 +36,14 @@ python3 -m verl.trainer.main_ppo \
     algorithm.kl_ctrl.kl_coef=0.05 \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
-    trainer.project_name=Qwen2.5-0.5-TokenEMA \
-    trainer.experiment_name=GRPO_Confidence_1 \
+    trainer.project_name=Qwen2.5-0.5-EMA  \
+    trainer.experiment_name=GRPO_Confidence_2 \
     trainer.n_gpus_per_node=1 \
-    trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_Confidence_1 \
+    trainer.default_local_dir=/root/autodl-tmp/verldev/Verl_RL/ckpts/Qwen2.5-0.5/GRPO_Confidence_2 \
     trainer.nnodes=1 \
     trainer.save_freq=4 \
     trainer.test_freq=1 \
-    trainer.total_epochs=8 \
+    trainer.total_epochs=4 \
     reward_model.reward_manager=logic_rl \
     actor_rollout_ref.actor.use_ema_smoothing=False \
     actor_rollout_ref.actor.ema_beta=0.9 \

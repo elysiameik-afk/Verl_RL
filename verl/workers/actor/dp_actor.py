@@ -335,12 +335,18 @@ class DataParallelPPOActor(BasePPOActor):
                     # 计算自信度
                     confidence = None
                     if calculate_confidence:
+                        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                            print(f"🔍 [调试] 开始计算自信度...")
+
                         # 计算token级别的置信度
                         responses = micro_batch["responses"]  # (bsz, response_length)
                         token_confidence = self._compute_token_confidence_from_logits(logits, responses)  # (bsz, response_length)
 
                         # 计算序列级别的LGC分数
                         confidence = self._compute_lgc_from_token_confidence(token_confidence)  # (bsz,)
+
+                        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                            print(f"🔍 [调试] 自信度计算完成: shape={confidence.shape if confidence is not None else None}")
 
                         # 清理中间变量，释放显存
                         del token_confidence
@@ -413,7 +419,17 @@ class DataParallelPPOActor(BasePPOActor):
         confidence_lst = []
 
         # 在compute_log_prob中启用自信度计算（如果配置允许）
-        calculate_confidence = self.config.get("use_confidence_scaling", False)
+        # 优先从actor自己的配置中读取，如果没有则从meta_info中读取（兼容性）
+        calculate_confidence = (
+            self.config.get("algorithm", {}).get("use_confidence_scaling", False) or
+            data.meta_info.get("use_confidence_scaling", False)
+        )
+
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            print(f"🔍 [调试] compute_log_prob: calculate_confidence={calculate_confidence}")
+            print(f"🔍 [调试] actor config有algorithm: {hasattr(self.config, 'algorithm') or 'algorithm' in self.config}")
+            if hasattr(self.config, 'algorithm') or 'algorithm' in self.config:
+                print(f"🔍 [调试] algorithm.use_confidence_scaling: {self.config.get('algorithm', {}).get('use_confidence_scaling', 'NOT_FOUND')}")
 
         for micro_batch in micro_batches:
             if isinstance(micro_batch, DataProto):
@@ -439,6 +455,11 @@ class DataParallelPPOActor(BasePPOActor):
             entropys = torch.concat(entropy_lst, dim=0)
         if calculate_confidence and confidence_lst:
             confidences = torch.concat(confidence_lst, dim=0)
+            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                print(f"🔍 [调试] 成功计算自信度: shape={confidences.shape}, values={confidences[:3] if len(confidences) > 0 else 'empty'}")
+        elif calculate_confidence:
+            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                print(f"🔍 [调试] 自信度计算失败: confidence_lst长度={len(confidence_lst)}")
 
         if use_dynamic_bsz:
             indices = list(itertools.chain.from_iterable(indices))
