@@ -1098,12 +1098,13 @@ class RayPPOTrainer:
 
                                 # 获取当前的token级别奖励
                                 token_level_rewards = batch.batch["token_level_rewards"]  # (batch_size, response_length)
-
+                                print("原始的reward",token_level_rewards)
                                 # 应用自信度缩放
                                 # confidences: (batch_size,) -> (batch_size, 1) for broadcasting
                                 confidence_scale = confidences.unsqueeze(-1)  # (batch_size, 1)
+                                print("缩放因子",confidence_scale)
                                 scaled_rewards = token_level_rewards * confidence_scale  # (batch_size, response_length)
-
+                                print("缩放之后的reward",scaled_rewards)
                                 # 更新奖励
                                 batch.batch["token_level_rewards"] = scaled_rewards
 
