@@ -753,6 +753,9 @@ algorithm:
   # Whether to enable confidence-based reward scaling
   use_confidence_scaling: False
 
+  # Confidence calculation frequency (calculate every N steps, 0 means every step)
+  confidence_calc_freq: 0
+
   # KL control configuration
   kl_ctrl:
 

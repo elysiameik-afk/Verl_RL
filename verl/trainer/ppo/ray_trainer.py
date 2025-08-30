@@ -1067,7 +1067,13 @@ class RayPPOTrainer:
 
                         # 应用自信度缩放（如果启用）
                         use_confidence_scaling = self.config.algorithm.get("use_confidence_scaling", False)
-                        if use_confidence_scaling and confidences is not None:
+                        confidence_calc_freq = self.config.algorithm.get("confidence_calc_freq", 0)
+
+                        # 检查是否应该在这一步计算自信度
+                        should_calc_confidence = (confidence_calc_freq == 0 or
+                                                 self.global_steps % confidence_calc_freq == 0)
+
+                        if use_confidence_scaling and confidences is not None and should_calc_confidence:
                             with _timer("confidence_scaling", timing_raw):
                                 # 获取当前的token级别奖励
                                 token_level_rewards = batch.batch["token_level_rewards"]  # (batch_size, response_length)

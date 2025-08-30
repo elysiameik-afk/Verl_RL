@@ -105,7 +105,7 @@ class DataParallelPPOActor(BasePPOActor):
             print(f"🎯 [创新点配置] PTRW={self.use_ptrw}, 时序衰减={self.use_temporal_decay}, 非对称裁剪={self.use_asymmetric_clipping}")
             print(f"🎯 [自信度配置] LGC窗口大小={self.lgc_window_size}")
 
-    def _compute_token_confidence_from_logits(self, logits: torch.Tensor, sampled_tokens: torch.Tensor, top_k: int = 20) -> torch.Tensor:
+    def _compute_token_confidence_from_logits(self, logits: torch.Tensor, sampled_tokens: torch.Tensor, top_k: int = 10) -> torch.Tensor:
         """
         计算token级别的置信度，使用DeepConf方法：排除实际采样的token，计算剩余top-k token的平均log概率
 
@@ -117,32 +117,30 @@ class DataParallelPPOActor(BasePPOActor):
         Returns:
             token置信度，形状与logits前导维度相同 (...)
         """
-        # 计算log概率
-        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)  # (..., vocab_size)
+        with torch.no_grad():  # 确保不计算梯度，节省显存
+            # 计算log概率（原地操作，节省显存）
+            log_probs = torch.nn.functional.log_softmax(logits, dim=-1)  # (..., vocab_size)
 
-        # 获取top-k的值和索引
-        top_k_values, top_k_indices = torch.topk(log_probs, k=top_k, dim=-1)  # (..., top_k)
+            # 获取top-k的值和索引
+            top_k_values, top_k_indices = torch.topk(log_probs, k=top_k, dim=-1)  # (..., top_k)
 
-        # 找到实际采样token在top-k中的位置
-        sampled_tokens_expanded = sampled_tokens.unsqueeze(-1)  # (..., 1)
-        mask = (top_k_indices == sampled_tokens_expanded)  # (..., top_k)
+            # 立即释放大的log_probs张量
+            del log_probs
 
-        # 创建排除采样token的mask
-        exclude_mask = ~mask  # (..., top_k)
+            # 找到实际采样token在top-k中的位置
+            sampled_tokens_expanded = sampled_tokens.unsqueeze(-1)  # (..., 1)
+            mask = (top_k_indices == sampled_tokens_expanded)  # (..., top_k)
 
-        # 计算排除采样token后的平均log概率
-        # 使用masked_fill将采样token的位置设为很小的值，然后计算平均
-        masked_values = top_k_values.masked_fill(mask, float('-inf'))
+            # 计算排除采样token后的平均log概率
+            # 使用更高效的计算方式
+            valid_values = top_k_values.masked_fill(mask, 0.0)  # 将采样token设为0
+            valid_count = (~mask).sum(dim=-1, keepdim=True).float()  # 有效token数量
 
-        # 计算有效token的数量（应该是top_k-1）
-        valid_count = exclude_mask.sum(dim=-1, keepdim=True).float()  # (..., 1)
+            # 计算平均值
+            confidence = valid_values.sum(dim=-1) / valid_count.squeeze(-1)  # (...)
 
-        # 计算平均值，排除-inf的值
-        valid_values = masked_values.masked_fill(masked_values == float('-inf'), 0.0)
-        confidence = valid_values.sum(dim=-1) / valid_count.squeeze(-1)  # (...)
-
-        # 取反得到置信度分数（越高越自信）
-        return -confidence
+            # 取反得到置信度分数（越高越自信）
+            return -confidence
 
     def _compute_lgc_from_token_confidence(self, token_confidence: torch.Tensor) -> torch.Tensor:
         """
@@ -344,6 +342,10 @@ class DataParallelPPOActor(BasePPOActor):
                         # 计算序列级别的LGC分数
                         confidence = self._compute_lgc_from_token_confidence(token_confidence)  # (bsz,)
 
+                        # 清理中间变量，释放显存
+                        del token_confidence
+                        torch.cuda.empty_cache()
+
             return entropy, log_probs, confidence
 
     def _optimizer_step(self):
@@ -410,8 +412,8 @@ class DataParallelPPOActor(BasePPOActor):
         entropy_lst = []
         confidence_lst = []
 
-        # 在compute_log_prob中启用自信度计算
-        calculate_confidence = True
+        # 在compute_log_prob中启用自信度计算（如果配置允许）
+        calculate_confidence = self.config.get("use_confidence_scaling", False)
 
         for micro_batch in micro_batches:
             if isinstance(micro_batch, DataProto):

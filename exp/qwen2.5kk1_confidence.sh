@@ -6,6 +6,7 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.use_confidence_scaling=True \
+    algorithm.confidence_calc_freq=0 \
     data.train_files=/root/autodl-tmp/myverl/data/kk/4ppl_few/train.parquet \
     data.val_files=/root/autodl-tmp/myverl/data/kk/4ppl_few/test.parquet \
     data.train_batch_size=16 \
