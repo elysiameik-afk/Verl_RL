@@ -750,6 +750,9 @@ algorithm:
   # How to estimate KL divergence: "kl", "abs", "mse", "low_var_kl", or "full"
   kl_penalty: kl
 
+  # Whether to enable confidence-based reward scaling
+  use_confidence_scaling: False
+
   # KL control configuration
   kl_ctrl:
 

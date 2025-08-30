@@ -6,8 +6,8 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.use_confidence_scaling=True \
-    data.train_files=/root/autodl-tmp/myverl/data/kk/kk_few/train.parquet \
-    data.val_files=/root/autodl-tmp/myverl/data/kk/kk_few/test.parquet \
+    data.train_files=/root/autodl-tmp/myverl/data/kk/4ppl_few/train.parquet \
+    data.val_files=/root/autodl-tmp/myverl/data/kk/4ppl_few/test.parquet \
     data.train_batch_size=16 \
     data.val_batch_size=8 \
     data.max_prompt_length=4096 \
@@ -35,7 +35,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.kl_ctrl.kl_coef=0.05 \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
-    trainer.project_name=Qwen2.5-0.5-Confidence \
+    trainer.project_name=Qwen2.5-0.5-TokenEMA \
     trainer.experiment_name=GRPO_Confidence_1 \
     trainer.n_gpus_per_node=1 \
     trainer.default_local_dir=/root/autodl-tmp/myverl/ckpts/Qwen2.5-0.5/GRPO_Confidence_1 \
@@ -44,6 +44,6 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=1 \
     trainer.total_epochs=8 \
     reward_model.reward_manager=logic_rl \
-    actor_rollout_ref.actor.use_ema_smoothing=True \
+    actor_rollout_ref.actor.use_ema_smoothing=False \
     actor_rollout_ref.actor.ema_beta=0.9 \
     #$@
