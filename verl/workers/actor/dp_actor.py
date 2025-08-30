@@ -178,6 +178,9 @@ class DataParallelPPOActor(BasePPOActor):
         else:
             lgc_scores = sorted_groups[:, start_idx:end_idx].mean(dim=-1)  # (batch_size,)
 
+        # 线性映射到[1.0, 2.0]范围
+        lgc_scores = self._linear_scale_confidence(lgc_scores)
+
         # 调试：检查重复值
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             unique_scores = torch.unique(lgc_scores)
@@ -188,6 +191,32 @@ class DataParallelPPOActor(BasePPOActor):
                 print(f"🔍 [自信度调试] response_len={response_len}, lgc_window_size={self.lgc_window_size}")
 
         return lgc_scores
+
+    def _linear_scale_confidence(self, confidences: torch.Tensor, target_range=(1.0, 2.0), min_spread=0.1) -> torch.Tensor:
+        """
+        将置信度线性缩放到指定范围
+
+        Args:
+            confidences: 原始置信度分数，形状 (batch_size,)
+            target_range: 目标缩放范围，默认(1.0, 2.0)
+            min_spread: 最小分布范围，避免除零
+
+        Returns:
+            缩放后的置信度，形状 (batch_size,)
+        """
+        min_conf = confidences.min()
+        max_conf = confidences.max()
+
+        # 如果置信度分布太窄，使用中间值
+        if max_conf - min_conf < min_spread:
+            target_mean = (target_range[0] + target_range[1]) / 2  # 1.5
+            return torch.ones_like(confidences) * target_mean
+
+        # 线性缩放到目标范围
+        target_min, target_max = target_range
+        scaled = target_min + (confidences - min_conf) / (max_conf - min_conf) * (target_max - target_min)
+
+        return scaled
 
     def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False, calculate_confidence=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
