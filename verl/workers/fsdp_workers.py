@@ -101,6 +101,7 @@ class ActorRolloutRefWorker(Worker):
     def __init__(self, config: DictConfig, role: str):
         super().__init__()
         self.config = config
+        import torch.distributed
 
         # 调试：打印配置结构
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -108,7 +109,6 @@ class ActorRolloutRefWorker(Worker):
             print(f"🔍 [调试] config中是否有algorithm: {'algorithm' in config}")
             if 'algorithm' in config:
                 print(f"🔍 [调试] algorithm.use_confidence_scaling: {config.algorithm.get('use_confidence_scaling', 'NOT_FOUND')}")
-        import torch.distributed
 
         if not torch.distributed.is_initialized():
             rank = int(os.environ.get("RANK", 0))
