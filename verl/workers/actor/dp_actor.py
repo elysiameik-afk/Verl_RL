@@ -329,10 +329,13 @@ class DataParallelPPOActor(BasePPOActor):
                     logits.div_(temperature)
                     logits = logits[:, -response_length - 1 : -1, :]  # (bsz, response_length, vocab_size)
                     log_probs = logprobs_from_logits(logits, micro_batch["responses"])
+
+                    # 先计算entropy，立即释放中间张量
                     if calculate_entropy:
                         entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
+                        torch.cuda.empty_cache()  # 立即释放entropy计算的中间张量
 
-                    # 计算自信度
+                    # 再计算自信度，避免与entropy计算的显存叠加
                     confidence = None
                     if calculate_confidence:
                         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
