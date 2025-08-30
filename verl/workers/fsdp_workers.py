@@ -667,11 +667,36 @@ class ActorRolloutRefWorker(Worker):
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
             with adapter_ctx:
-                output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
-            output = DataProto.from_dict(
-                tensors={"old_log_probs": output, "entropys": entropys},
-                meta_info={"temperature": self.config.rollout.temperature},
-            )
+                actor_output = self.actor.compute_log_prob(data=data, calculate_entropy=True)
+
+                # 兼容性处理：检查返回值类型
+                if isinstance(actor_output, DataProto):
+                    # 新格式：返回DataProto对象
+                    log_probs = actor_output.batch["old_log_probs"]
+                    entropys = actor_output.batch.get("entropys", None)
+                    confidences = actor_output.batch.get("confidences", None)
+
+                    # 构造返回的DataProto
+                    tensors = {"old_log_probs": log_probs}
+                    if entropys is not None:
+                        tensors["entropys"] = entropys
+                    if confidences is not None:
+                        tensors["confidences"] = confidences
+
+                    output = DataProto.from_dict(
+                        tensors=tensors,
+                        meta_info={"temperature": self.config.rollout.temperature},
+                    )
+                else:
+                    # 旧格式：返回tuple (兼容其他算法)
+                    if isinstance(actor_output, tuple) and len(actor_output) == 2:
+                        log_probs, entropys = actor_output
+                        output = DataProto.from_dict(
+                            tensors={"old_log_probs": log_probs, "entropys": entropys},
+                            meta_info={"temperature": self.config.rollout.temperature},
+                        )
+                    else:
+                        raise ValueError(f"Unexpected return format from compute_log_prob: {type(actor_output)}")
             output = self.ulysses_sharding_manager.postprocess_data(output)
 
         output = output.to("cpu")
@@ -709,8 +734,21 @@ class ActorRolloutRefWorker(Worker):
         data.meta_info["use_dynamic_bsz"] = self.config.ref.log_prob_use_dynamic_bsz
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
-            output, _ = self.ref_policy.compute_log_prob(data=data, calculate_entropy=False)
-            output = DataProto.from_dict(tensors={"ref_log_prob": output})
+            ref_output = self.ref_policy.compute_log_prob(data=data, calculate_entropy=False)
+
+            # 兼容性处理：检查返回值类型
+            if isinstance(ref_output, DataProto):
+                # 新格式：返回DataProto对象
+                log_probs = ref_output.batch["old_log_probs"]
+                output = DataProto.from_dict(tensors={"ref_log_prob": log_probs})
+            else:
+                # 旧格式：返回tuple或tensor
+                if isinstance(ref_output, tuple):
+                    log_probs, _ = ref_output
+                    output = DataProto.from_dict(tensors={"ref_log_prob": log_probs})
+                else:
+                    # 直接返回tensor的情况
+                    output = DataProto.from_dict(tensors={"ref_log_prob": ref_output})
             output = self.ulysses_sharding_manager.postprocess_data(output)
 
         output = output.to("cpu")
