@@ -63,6 +63,8 @@ class LogicRLRewardManager:
         reward_extra_info = defaultdict(list)
         already_print_data_sources = {}
 
+        print(f"🔍 [奖励调试] reward_tensor.shape={reward_tensor.shape}, len(data)={len(data)}")
+
         for i in range(len(data)):
             data_item = data[i]
 
@@ -86,9 +88,11 @@ class LogicRLRewardManager:
             
             # The Logic-RL score functions expect the full response string
             # score = compute_score_fn(solution_str=response_str, ground_truth=ground_truth)
-            score = compute_score_fn(response_str,ground_truth)            
+            score = compute_score_fn(response_str,ground_truth)
             reward_extra_info["logic_rl_score"].append(score)
             reward_tensor[i, valid_response_length - 1] = score
+
+            print(f"🔍 [奖励调试] 样本{i}: score={score}, 位置=({i}, {valid_response_length - 1})")
 
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
