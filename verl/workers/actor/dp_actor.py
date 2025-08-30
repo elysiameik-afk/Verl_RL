@@ -58,10 +58,10 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_optimizer = actor_optimizer
 
         self.use_remove_padding = self.config.get("use_remove_padding", False)
-        if torch.distributed.get_rank() == 0:
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             print(f"Actor use_remove_padding={self.use_remove_padding}")
         self.use_fused_kernels = self.config.get("use_fused_kernels", False)
-        if torch.distributed.get_rank() == 0:
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             print(f"Actor use_fused_kernels={self.use_fused_kernels}")
 
         self.ulysses_sequence_parallel_size = self.config.ulysses_sequence_parallel_size
@@ -358,7 +358,8 @@ class DataParallelPPOActor(BasePPOActor):
 
         # if grad_norm is not finite, skip the update
         if not torch.isfinite(grad_norm):
-            print(f"WARN: rank {torch.distributed.get_rank()} grad_norm is not finite: {grad_norm}")
+            rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+            print(f"WARN: rank {rank} grad_norm is not finite: {grad_norm}")
             self.actor_optimizer.zero_grad()
         else:
             self.actor_optimizer.step()

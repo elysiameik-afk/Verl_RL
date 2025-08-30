@@ -1089,11 +1089,11 @@ class RayPPOTrainer:
                                 }
                                 metrics.update(confidence_metrics)
 
-                                if torch.distributed.get_rank() == 0:
+                                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
                                     print(f"🎯 [自信度缩放] 平均自信度: {confidences.mean().item():.4f}, "
                                           f"范围: [{confidences.min().item():.4f}, {confidences.max().item():.4f}]")
                         elif use_confidence_scaling and confidences is None:
-                            if torch.distributed.get_rank() == 0:
+                            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
                                 print("⚠️  [自信度缩放] 启用了自信度缩放但未获得自信度数据，跳过缩放")
 
                         # compute advantages, executed on the driver process
