@@ -1080,8 +1080,20 @@ class RayPPOTrainer:
                         should_calc_confidence = (confidence_calc_freq == 0 or
                                                  self.global_steps % confidence_calc_freq == 0)
 
+                        # 详细的调试信息
+                        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                            print(f"🔍 [缩放调试] use_confidence_scaling={use_confidence_scaling}, "
+                                  f"confidences存在={confidences is not None}, "
+                                  f"should_calc_confidence={should_calc_confidence}")
+                            if confidences is not None:
+                                print(f"🔍 [缩放调试] confidences.shape={confidences.shape}, "
+                                      f"values={confidences[:3] if len(confidences) > 0 else 'empty'}")
+
                         if use_confidence_scaling and confidences is not None and should_calc_confidence:
                             with _timer("confidence_scaling", timing_raw):
+                                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                                    print("✅ [自信度缩放] 真正执行了缩放！")
+
                                 # 获取当前的token级别奖励
                                 token_level_rewards = batch.batch["token_level_rewards"]  # (batch_size, response_length)
 
@@ -1105,9 +1117,19 @@ class RayPPOTrainer:
                                 if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
                                     print(f"🎯 [自信度缩放] 平均自信度: {confidences.mean().item():.4f}, "
                                           f"范围: [{confidences.min().item():.4f}, {confidences.max().item():.4f}]")
-                        elif use_confidence_scaling and confidences is None:
+                                    print(f"🎯 [自信度缩放] 奖励缩放前后对比: "
+                                          f"原始={token_level_rewards[0, :3]}, "
+                                          f"缩放后={scaled_rewards[0, :3]}")
+                        else:
                             if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-                                print("⚠️  [自信度缩放] 启用了自信度缩放但未获得自信度数据，跳过缩放")
+                                if use_confidence_scaling and confidences is None:
+                                    print("❌ [自信度缩放] 启用了自信度缩放但未获得自信度数据，跳过缩放")
+                                elif use_confidence_scaling and not should_calc_confidence:
+                                    print(f"❌ [自信度缩放] 跳过缩放，频率控制：当前步数={self.global_steps}, 频率={confidence_calc_freq}")
+                                elif not use_confidence_scaling:
+                                    print("❌ [自信度缩放] 未启用自信度缩放")
+                                else:
+                                    print("❌ [自信度缩放] 其他原因跳过缩放")
 
                         # compute advantages, executed on the driver process
 
