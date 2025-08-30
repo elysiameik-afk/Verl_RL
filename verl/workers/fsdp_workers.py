@@ -100,15 +100,24 @@ class ActorRolloutRefWorker(Worker):
 
     def __init__(self, config: DictConfig, role: str):
         super().__init__()
-        self.config = config
+        # 确保config是DictConfig类型
+        if isinstance(config, dict):
+            from omegaconf import DictConfig
+            self.config = DictConfig(config)
+        else:
+            self.config = config
         import torch.distributed
 
         # 调试：打印配置结构
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             print(f"🔍 [调试] fsdp_workers收到的config keys: {list(config.keys())}")
             print(f"🔍 [调试] config中是否有algorithm: {'algorithm' in config}")
+            print(f"🔍 [调试] config类型: {type(config)}")
             if 'algorithm' in config:
-                print(f"🔍 [调试] algorithm.use_confidence_scaling: {config.algorithm.get('use_confidence_scaling', 'NOT_FOUND')}")
+                # 处理dict和DictConfig两种情况
+                algorithm_config = config['algorithm'] if isinstance(config, dict) else config.algorithm
+                use_confidence = algorithm_config.get('use_confidence_scaling', 'NOT_FOUND') if hasattr(algorithm_config, 'get') else algorithm_config.get('use_confidence_scaling', 'NOT_FOUND')
+                print(f"🔍 [调试] algorithm.use_confidence_scaling: {use_confidence}")
 
         if not torch.distributed.is_initialized():
             rank = int(os.environ.get("RANK", 0))
@@ -540,7 +549,7 @@ class ActorRolloutRefWorker(Worker):
                 self.config.actor.use_remove_padding = use_remove_padding
                 self.config.actor.use_fused_kernels = use_fused_kernels
                 # 传递algorithm配置给actor
-                if hasattr(self.config, 'algorithm'):
+                if hasattr(self.config, 'algorithm') or 'algorithm' in self.config:
                     self.config.actor.algorithm = self.config.algorithm
             self.actor = DataParallelPPOActor(config=self.config.actor, actor_module=self.actor_module_fsdp, actor_optimizer=self.actor_optimizer)
 
