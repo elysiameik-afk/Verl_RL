@@ -273,14 +273,35 @@ def compute_grpo_passk_outcome_advantage(
             rewards = torch.stack(id2scores[idx])  # (k,)
             if rewards.numel() < 2:
                 raise ValueError(f"Pass@k requires at least 2 samples per group. Got {rewards.numel()} for group {idx}.")
-            topk, topk_idx = torch.topk(rewards, 2)
-            r_max, r_second_max = topk[0], topk[1]
-            i_max = id2indices[idx][topk_idx[0].item()]
-            advantage = r_max - r_second_max
-            if norm_adv_by_std_in_grpo:
-                std = torch.std(rewards)
-                advantage = advantage / (std + epsilon)
-            advantages[i_max] = advantage
+
+            # ===== 原始GRPO优势计算（已注释，可手动切换） =====
+            # topk, topk_idx = torch.topk(rewards, 2)
+            # r_max, r_second_max = topk[0], topk[1]
+            # i_max = id2indices[idx][topk_idx[0].item()]
+            # advantage = r_max - r_second_max
+            # if norm_adv_by_std_in_grpo:
+            #     std = torch.std(rewards)
+            #     advantage = advantage / (std + epsilon)
+            # advantages[i_max] = advantage
+
+            # ===== 新的最好+最差优势计算 =====
+            # 找到最好和最差样本的索引
+            max_idx_in_group = torch.argmax(rewards)
+            min_idx_in_group = torch.argmin(rewards)
+            i_max = id2indices[idx][max_idx_in_group.item()]
+            i_min = id2indices[idx][min_idx_in_group.item()]
+
+            # 获取最好和最差的分数
+            r_max = rewards[max_idx_in_group]
+            r_min = rewards[min_idx_in_group]
+
+            # 计算标准差用于归一化
+            std = torch.std(rewards)
+
+            # 设置绝对优势（基于真实分数，不是相对差异）
+            advantages[i_max] = r_max / (std + epsilon)    # 最好样本：正优势
+            advantages[i_min] = r_min / (std + epsilon)    # 最差样本：负优势
+            # 其他样本的advantage保持为0（不参与训练）
 
     advantages = advantages.unsqueeze(-1) * response_mask
     return advantages, advantages
