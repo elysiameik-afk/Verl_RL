@@ -235,29 +235,66 @@ def compute_grpo_outcome_advantage(
             else:
                 temp_advantages[i] = scores[i] - id2mean[index[i]]
 
-        # 第2步：按组选择最好和最差样本，其余置0
+        # 第2步：按组选择样本，其余置0
         final_advantages = torch.zeros_like(temp_advantages)
+        selected_samples_info = []  # 用于调试信息
+
         for idx in id2score:
             # 找到该组的所有样本索引
             group_indices = [i for i in range(bsz) if index[i] == idx]
             if len(group_indices) >= 2:
                 # 找到组内最好和最差样本
                 group_advantages = [temp_advantages[i] for i in group_indices]
+                group_scores = [scores[i].item() for i in group_indices]
                 max_idx = group_indices[torch.argmax(torch.tensor(group_advantages)).item()]
                 min_idx = group_indices[torch.argmin(torch.tensor(group_advantages)).item()]
 
-                # 只保留最好和最差样本的advantage
+                # # ===== 模式1：最好+最差样本（当前激活） =====
+                # final_advantages[max_idx] = temp_advantages[max_idx]
+                # selected_count = 1
+                # selected_info = f"最好(score={scores[max_idx].item():.3f})"
+                # if max_idx != min_idx:  # 避免重复设置同一个样本
+                #     final_advantages[min_idx] = temp_advantages[min_idx]
+                #     selected_count = 2
+                #     selected_info += f"+最差(score={scores[min_idx].item():.3f})"
+
+                # ===== 模式2：只要最好样本（已注释） =====
                 final_advantages[max_idx] = temp_advantages[max_idx]
-                final_advantages[min_idx] = temp_advantages[min_idx]
-                # 其他样本保持0（不参与训练）
+                selected_count = 1
+                selected_info = f"最好(score={scores[max_idx].item():.3f})"
+
+                # ===== 模式3：只要最差样本（已注释） =====
+                # final_advantages[min_idx] = temp_advantages[min_idx]
+                # selected_count = 1
+                # selected_info = f"最差(score={scores[min_idx].item():.3f})"
+
+                selected_samples_info.append(f"组{idx}: {selected_count}个样本 - {selected_info}")
+
             elif len(group_indices) == 1:
                 # 如果组内只有一个样本，保留其advantage
                 final_advantages[group_indices[0]] = temp_advantages[group_indices[0]]
+                selected_samples_info.append(f"组{idx}: 1个样本 - 单样本(score={scores[group_indices[0]].item():.3f})")
 
         scores = final_advantages
         scores = scores.unsqueeze(-1) * response_mask
-        print("=============================成功使用真正GRPO的最好+最差样本训练====================")
+        print("=============================成功使用真正GRPO的选择性样本训练====================")
+
+        # 详细的调试信息
+        total_groups = len(id2score)
+        group_sizes = [len(id2score[idx]) for idx in id2score]
+        single_sample_groups = sum(1 for size in group_sizes if size == 1)
+        multi_sample_groups = sum(1 for size in group_sizes if size > 1)
+
         print(f"🎯 [GRPO改进] 样本利用率: {torch.count_nonzero(final_advantages).item()}/{bsz} = {torch.count_nonzero(final_advantages).item()/bsz*100:.1f}%")
+        print(f"📊 [GRPO调试] 总组数: {total_groups}, 单样本组: {single_sample_groups}, 多样本组: {multi_sample_groups}")
+        print(f"📊 [GRPO调试] 组大小分布: {group_sizes[:10]}...")  # 只显示前10个组的大小
+
+        # 打印前5组的详细选择信息
+        print("📋 [GRPO详情] 前5组的样本选择:")
+        for i, info in enumerate(selected_samples_info[:5]):
+            print(f"    {info}")
+        if len(selected_samples_info) > 5:
+            print(f"    ... 还有{len(selected_samples_info)-5}组")
 
     return scores, scores
 
