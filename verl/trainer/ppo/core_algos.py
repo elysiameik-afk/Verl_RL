@@ -302,6 +302,7 @@ def compute_grpo_passk_outcome_advantage(
             advantages[i_max] = r_max / (std + epsilon)    # 最好样本：正优势
             advantages[i_min] = r_min / (std + epsilon)    # 最差样本：负优势
             # 其他样本的advantage保持为0（不参与训练）
+            print("=============================成功使用正负样本====================")
 
     advantages = advantages.unsqueeze(-1) * response_mask
     return advantages, advantages
