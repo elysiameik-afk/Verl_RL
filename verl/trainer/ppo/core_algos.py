@@ -217,12 +217,47 @@ def compute_grpo_outcome_advantage(
                 id2std[idx] = torch.std(torch.tensor([id2score[idx]]))
             else:
                 raise ValueError(f"no score in prompt index: {idx}")
+
+        # ===== 原始GRPO计算（已注释，可手动切换） =====
+        # for i in range(bsz):
+        #     if norm_adv_by_std_in_grpo:
+        #         scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+        #     else:
+        #         scores[i] = scores[i] - id2mean[index[i]]
+        # scores = scores.unsqueeze(-1) * response_mask
+
+        # ===== 新的最好+最差样本选择性训练 =====
+        # 第1步：计算所有样本的标准化advantage
+        temp_advantages = torch.zeros_like(scores)
         for i in range(bsz):
             if norm_adv_by_std_in_grpo:
-                scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+                temp_advantages[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
             else:
-                scores[i] = scores[i] - id2mean[index[i]]
+                temp_advantages[i] = scores[i] - id2mean[index[i]]
+
+        # 第2步：按组选择最好和最差样本，其余置0
+        final_advantages = torch.zeros_like(temp_advantages)
+        for idx in id2score:
+            # 找到该组的所有样本索引
+            group_indices = [i for i in range(bsz) if index[i] == idx]
+            if len(group_indices) >= 2:
+                # 找到组内最好和最差样本
+                group_advantages = [temp_advantages[i] for i in group_indices]
+                max_idx = group_indices[torch.argmax(torch.tensor(group_advantages)).item()]
+                min_idx = group_indices[torch.argmin(torch.tensor(group_advantages)).item()]
+
+                # 只保留最好和最差样本的advantage
+                final_advantages[max_idx] = temp_advantages[max_idx]
+                final_advantages[min_idx] = temp_advantages[min_idx]
+                # 其他样本保持0（不参与训练）
+            elif len(group_indices) == 1:
+                # 如果组内只有一个样本，保留其advantage
+                final_advantages[group_indices[0]] = temp_advantages[group_indices[0]]
+
+        scores = final_advantages
         scores = scores.unsqueeze(-1) * response_mask
+        print("=============================成功使用真正GRPO的最好+最差样本训练====================")
+        print(f"🎯 [GRPO改进] 样本利用率: {torch.count_nonzero(final_advantages).item()}/{bsz} = {torch.count_nonzero(final_advantages).item()/bsz*100:.1f}%")
 
     return scores, scores
 
